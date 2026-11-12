@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: CC0-1.0
+name: Protocol vectors
+
+on:
+  push:
+    paths: ["spec/**", "reference/**", ".github/workflows/vectors.yml"]
+  pull_request:
+    paths: ["spec/**", "reference/**", ".github/workflows/vectors.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  vectors:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+
+      - name: Python reference checks the vectors
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --require-hashes -r reference/python/requirements.txt
+          .venv/bin/python reference/python/check_vectors.py spec/vectors/kinfold-v0.json
+
+      - name: Vectors regenerate byte for byte
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/hpke.json" \
+            https://raw.githubusercontent.com/cfrg/draft-irtf-cfrg-hpke/b1f7cb0cdeab6906c61b3d6574e8bdfdbe1cd3fb/test-vectors.json
+          echo "61fc662f01996cd06d713dacf5e133167bd309a1f329442d53f1e21a47b3ede6  $RUNNER_TEMP/hpke.json" | sha256sum -c
+          .venv/bin/python reference/python/gen_vectors.py "$RUNNER_TEMP/regenerated.json" "$RUNNER_TEMP/hpke.json"
+          cmp "$RUNNER_TEMP/regenerated.json" spec/vectors/kinfold-v0.json
+
+      - name: Independent WebCrypto implementation checks the vectors
+        run: node reference/js/verify.mjs spec/vectors/kinfold-v0.json
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.24"
+          cache: false
+
+      - name: Go checks the server-side (public mode) vectors
+        working-directory: reference/go
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet .
+          go run . ../../spec/vectors/kinfold-v0.json
