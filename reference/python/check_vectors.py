@@ -115,6 +115,8 @@ check("log", "circle_id", st.circle_id.hex() == L["circle_id"])
 for c in L["cases"]:
     s0, p0 = lg.replay(raws, secrets, upto=c["base_seq"])[0], lg.replay(raws, None, upto=c["base_seq"])[0]
     secs = {**secrets, **{int(k): hx(x) for k, x in c.get("new_epoch_secrets", {}).items()}}
+    for w in c.get("withheld_epochs", []):
+        secs.pop(w, None)            # the device under test never received this secret (6.5)
     for e in c["entries"]:
         s0, p0 = run(s0, p0, e, secs, c["name"])
 
@@ -122,7 +124,7 @@ for c in L["cases"]:
 E = v["envelopes"]
 NOW = E["receiver_now"]
 SERVER_REASONS = {"malformed", "bad_version", "bad_kind", "wrong_circle", "unknown_log_head", "sender_not_active",
-                  "bad_signature", "expired", "replay", "bad_wraps", "bad_ttl"}
+                  "bad_signature", "expired", "bad_time", "replay", "bad_wraps", "bad_ttl"}
 keys = lambda d: {hx(a): hx(b) for a, b in d.items()}
 
 

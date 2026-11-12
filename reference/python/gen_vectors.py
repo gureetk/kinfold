@@ -95,10 +95,11 @@ class Person:
 
 
 J = Person("jordan", [("phone", 1), ("tablet", 2), ("web", 3)])
-A = Person("alex", [("phone", 1)])
+A = Person("alex", [("phone", 1), ("tablet", 2)])
 M = Person("maya", [("phone", 1)])
 S = Person("sam", [("phone", 1)])
 jp, jt, jw, ap, mp, sp = J.dev["phone"], J.dev["tablet"], J.dev["web"], A.dev["phone"], M.dev["phone"], S.dev["phone"]
+at = A.dev["tablet"]
 
 
 class LogBuilder:
@@ -107,11 +108,13 @@ class LogBuilder:
         self.secrets = {0: rnd("circle/epoch/0")}
         self.records, self.raws = [], []
         self.clock = T0 - 10 * MIN
+        self.withheld = set()
 
     def fork(self):
         b = LogBuilder()
         b.state, b.pstate, b.secrets = copy.deepcopy(self.state), copy.deepcopy(self.pstate), dict(self.secrets)
         b.clock = self.clock
+        b.withheld = set(self.withheld)
         return b
 
     def head(self, t, author, created_at=None, **over):
@@ -138,7 +141,7 @@ class LogBuilder:
 
     def commit(self, desc, author, raw, expect, reason=None, details_pt=None, extra=None, public=None):
         try:
-            new, res, why = lg.apply(self.state, raw, self.secrets)
+            new, res, why = lg.apply(self.state, raw, {k: v for k, v in self.secrets.items() if k not in self.withheld})
         except lg.Fatal as e:
             new, res, why = None, "fatal", e.reason
         try:
@@ -191,6 +194,13 @@ def epoch_entry(b, t, author, desc, target, devices, expect="accepted", reason=N
                     extra=dict(new_epoch=new_epoch, new_epoch_secret=secret.hex(), wrap_ikm=ikms))
 
 
+def pending_removal(b, t, author, desc, target, expect="accepted", reason=None):
+    """A removal not authored by a remaining admin carries no new secret and sets rekey_pending (6.4)."""
+    hdr, f = b.head(t, author)
+    raw = lg.build_entry(author.dsk, hdr, target + lg.ZERO32 + vec32(b""))
+    return b.commit(desc, author, raw, expect, reason)
+
+
 # ======================= the main log ==========================================
 B = LogBuilder()
 RULES = dict(pause_mode=2, approx_mode=1, speed_alert_kmh=110, phone_use_alerts=1, history_days=14,
@@ -221,7 +231,7 @@ epoch_entry(B, lg.REMOVE_DEVICE, jp, "Jordan removes the tablet (epoch 1)", jt.i
 hdr, f = B.head(lg.SET_ADMIN, jp)
 B.commit("Jordan makes Alex a non-admin", jp, lg.build_entry(jp.dsk, hdr, A.acc + u8(0)), "accepted")
 policy(B, jp, "Jordan renames the circle", lg.enc_policy(lg.SET_CIRCLE_NAME, name="Rivera family"))
-epoch_entry(B, lg.REKEY, mp, "Maya's phone starts a new epoch (epoch 2)", None, [jp, ap, mp])
+epoch_entry(B, lg.REKEY, jp, "Jordan's phone starts a new epoch (epoch 2)", None, [jp, ap, mp])
 policy(B, jp, "Jordan revokes Maya's pause", lg.enc_policy(lg.REVOKE_PAUSE, M.acc, pause_id=PAUSE1))
 policy(B, mp, "Maya tries to grant herself a pause: rejected, stays in the chain as a no-op",
        lg.enc_policy(lg.GRANT_PAUSE, M.acc, pause_id=rnd("pause/self", 8), kind=1, start=T0 + 3 * HOUR,
@@ -239,6 +249,8 @@ def case(name, desc, fn, empty=False):
     b = LogBuilder() if empty else B.fork()
     fn(b)
     rec = dict(name=name, description=desc, base_seq=-1 if empty else FINAL, entries=b.records)
+    if b.withheld:
+        rec["withheld_epochs"] = sorted(b.withheld)
     last = b.records[-1]
     if "state_after" in last:
         rec["state_after"] = last["state_after"]
@@ -384,8 +396,8 @@ def c_bad_details(b):
 
 # accepted edge cases
 def c_teen_leaves(b):
-    epoch_entry(b, lg.REMOVE_MEMBER, mp, "Maya leaves on her own: valid at the protocol level, and everyone "
-                                         "is alerted (epoch 3)", M.acc, [jp, ap])
+    pending_removal(b, lg.REMOVE_MEMBER, mp, "Maya leaves on her own: valid, and everyone is alerted; she would know any "
+                    "key she made, so the epoch stays and a rekey is pending", M.acc)
 
 
 def c_add_bad_details(b):
@@ -408,10 +420,9 @@ def c_end_teen_guardian(b):
 def c_repair(b):
     hdr, f = b.head(lg.SET_ADMIN, jp)
     b.commit("Jordan makes Alex an admin again", jp, lg.build_entry(jp.dsk, hdr, A.acc + u8(1)), "accepted")
-    epoch_entry(b, lg.REMOVE_MEMBER, jp, "Jordan leaves; Maya's only guardian is gone, so guardianship passes to "
-                                         "the remaining adult admin, Alex (epoch 3)", J.acc, [ap, mp])
-    assert lg.state_json(b.state)["members"][[m["account_id"] for m in lg.state_json(b.state)["members"]]
-                                              .index(M.acc.hex())]["guardians"] == [A.acc.hex()]
+    pending_removal(b, lg.REMOVE_MEMBER, jp, "Jordan leaves; Maya's only guardian is gone, so guardianship passes to "
+                    "the remaining adult admin, Alex", J.acc)
+    assert maya(b)["guardians"] == [A.acc.hex()]
 
 
 def genesis_entry(b, author, cert, bundle, signer, details_secret=None, **over):
@@ -496,8 +507,8 @@ def maya(b):
 def c_repair_adults(b):
     hdr, f = b.head(lg.SET_ADMIN, jp)
     b.commit("Jordan makes Maya an admin", jp, lg.build_entry(jp.dsk, hdr, M.acc + u8(1)), "accepted")
-    epoch_entry(b, lg.REMOVE_MEMBER, jp, "Jordan leaves; no adult admin remains, so guardianship passes to every "
-                                         "adult member: Alex (epoch 3)", J.acc, [ap, mp])
+    pending_removal(b, lg.REMOVE_MEMBER, jp, "Jordan leaves; no adult admin remains, so guardianship passes to every "
+                    "adult member: Alex", J.acc)
     assert maya(b)["guardians"] == [A.acc.hex()]
 
 
@@ -505,9 +516,113 @@ def c_repair_none(b):
     hdr, f = b.head(lg.SET_ADMIN, jp)
     b.commit("Jordan makes Maya an admin", jp, lg.build_entry(jp.dsk, hdr, M.acc + u8(1)), "accepted")
     epoch_entry(b, lg.REMOVE_MEMBER, jp, "Jordan removes Alex (epoch 3)", A.acc, [jp, mp])
-    epoch_entry(b, lg.REMOVE_MEMBER, jp, "Jordan leaves; no adult remains, so Maya's teen settings end (epoch 4)",
-                J.acc, [mp])
+    pending_removal(b, lg.REMOVE_MEMBER, jp, "Jordan leaves; no adult remains, so Maya's teen settings end", J.acc)
     assert maya(b)["role"] == "adult" and maya(b)["rules"] is None
+
+
+def c_removal_clears_pending(b):
+    leave_maya(b)
+    epoch_entry(b, lg.REMOVE_MEMBER, jp, "Jordan removes Alex (epoch 3), which also clears the pending rekey", A.acc,
+                [jp])
+    assert lg.state_json(b.state)["rekey_pending"] is False
+
+
+def c_admin_device_removes_itself(b):
+    hdr, f = b.head(lg.ADD_DEVICE, jp)
+    b.commit("Jordan adds his tablet back", jp, lg.build_entry(jp.dsk, hdr, jt.cert + jt.bundle), "accepted")
+    pending_removal(b, lg.REMOVE_DEVICE, jt, "The tablet removes itself: Jordan is an admin, but this device is "
+                    "leaving, so a rekey is pending", jt.id)
+
+
+def c_pending_with_commit(b):
+    hdr, f = b.head(lg.REMOVE_MEMBER, mp)
+    raw = lg.build_entry(mp.dsk, hdr, M.acc + rnd("leaver-commit") + vec32(b""))
+    b.commit("Maya leaves with a commitment but no wraps", mp, raw, "fatal", "bad_wraps")
+
+
+def c_rekey_not_admin(b):
+    epoch_entry(b, lg.REKEY, mp, "Maya (not an admin) starts a new epoch", None, [jp, ap, mp], "fatal", "not_admin")
+
+
+def c_self_leave_with_key(b):
+    epoch_entry(b, lg.REMOVE_MEMBER, mp, "Maya leaves and hands out a new key she would know", M.acc, [jp, ap],
+                "fatal", "bad_wraps")
+
+
+def leave_maya(b):
+    pending_removal(b, lg.REMOVE_MEMBER, mp, "Maya leaves; a rekey is now pending", M.acc)
+
+
+def c_pending_policy(b):
+    leave_maya(b)
+    policy(b, jp, "Jordan renames the circle before anyone rekeys", lg.enc_policy(lg.SET_CIRCLE_NAME, name="Riveras"),
+           expect="fatal", reason="rekey_pending")
+
+
+def c_pending_add(b):
+    leave_maya(b)
+    add_member(b, jp, sp, rnd("invite/sam", 16), 0, lg.enc_member_details(lg.ADULT, 0, [], lg.DEFAULT_RULES),
+               "Jordan adds Sam before anyone rekeys", "fatal", "rekey_pending")
+
+
+def c_pending_cleared(b):
+    leave_maya(b)
+    epoch_entry(b, lg.REKEY, jp, "Jordan rekeys (epoch 3), which clears the pending flag", None, [jp, ap])
+    policy(b, jp, "Jordan renames the circle in the new epoch", lg.enc_policy(lg.SET_CIRCLE_NAME, name="Riveras"))
+
+
+def c_own_device(b):
+    hdr, f = b.head(lg.ADD_DEVICE, ap)
+    b.commit("Alex adds a tablet", ap, lg.build_entry(ap.dsk, hdr, at.cert + at.bundle), "accepted")
+    pending_removal(b, lg.REMOVE_DEVICE, ap, "Alex (not an admin) removes his tablet: no new key; a rekey is pending",
+                    at.id)
+
+
+def c_last_member(b):
+    epoch_entry(b, lg.REMOVE_MEMBER, jp, "Jordan removes Alex (epoch 3)", A.acc, [jp, mp])
+    epoch_entry(b, lg.REMOVE_MEMBER, jp, "Jordan removes Maya (epoch 4)", M.acc, [jp])
+    pending_removal(b, lg.REMOVE_MEMBER, jp, "Jordan, the last member, leaves: the circle is closed", J.acc)
+
+
+def c_details_unsorted(b):
+    policy(b, jp, "SET_GUARDIANS whose list is out of order",
+           lg.enc_policy(lg.SET_GUARDIANS, M.acc, guardians=sorted([J.acc, A.acc], reverse=True)),
+           expect="rejected", reason="bad_details")
+
+
+def c_details_schedule(b):
+    pt = lg.enc_policy(lg.SET_RULES, M.acc, rules={**RULES, "schedule": []})
+    pt = pt[:-2] + vec16(bytes([1, 31, 3, 162, 4]))
+    policy(b, jp, "SET_RULES whose schedule is 5 bytes long", pt, expect="rejected", reason="bad_details")
+
+
+def c_add_unsorted(b):
+    add_member(b, jp, sp, rnd("invite/sam", 16), 0,
+               lg.enc_member_details(lg.TEEN, TEEN_UNTIL, sorted([J.acc, A.acc], reverse=True), lg.DEFAULT_RULES),
+               "Sam is added as a teen with guardians out of order: added as an adult and flagged",
+               reason="bad_details")
+
+
+def c_repair_admin_only(b):
+    hdr, f = b.head(lg.SET_ADMIN, jp)
+    b.commit("Jordan makes Alex an admin again", jp, lg.build_entry(jp.dsk, hdr, A.acc + u8(1)), "accepted")
+    add_member(b, jp, sp, rnd("invite/sam", 16), 0, lg.enc_member_details(lg.ADULT, 0, [], lg.DEFAULT_RULES),
+               "Jordan adds Sam as an adult who isn't an admin")
+    pending_removal(b, lg.REMOVE_MEMBER, jp, "Jordan leaves; guardianship passes to the adult admins (Alex), not to "
+                    "every adult", J.acc)
+    assert maya(b)["guardians"] == [A.acc.hex()]
+
+
+def c_deferred(b):
+    b.withheld = {3}
+    epoch_entry(b, lg.REKEY, jp, "Jordan rekeys (epoch 3); this device never receives the new secret", None,
+                [jp, ap, mp])
+    hdr, f = b.head(lg.SET_ADMIN, jp)
+    b.commit("Jordan makes Alex an admin in epoch 3: no details, so this device still applies it in full", jp,
+             lg.build_entry(jp.dsk, hdr, A.acc + u8(1)), "accepted")
+    policy(b, jp, "Jordan changes Maya's rules in epoch 3; this device can't read them, so its private state "
+                  "freezes until the secret arrives", lg.enc_policy(lg.SET_RULES, M.acc, rules={**RULES, "history_days": 7}),
+           expect="deferred")
 
 
 EMPTY_CASES = [
@@ -587,6 +702,23 @@ CASES = [
     ("accepted_guardian_repair", "last guardian leaves; an adult admin takes over", c_repair),
     ("accepted_guardian_repair_adults", "last guardian leaves; no adult admin, so every adult", c_repair_adults),
     ("accepted_guardian_repair_no_adults", "no adult remains; teen settings end", c_repair_none),
+    ("accepted_guardian_repair_admin_only", "repair prefers adult admins over other adults", c_repair_admin_only),
+    ("fatal_rekey_not_admin", "only admins start epochs", c_rekey_not_admin),
+    ("fatal_pending_removal_with_commit", "a removal that starts no epoch carries no commitment", c_pending_with_commit),
+    ("accepted_removal_clears_pending", "a removal that starts an epoch clears the pending flag",
+     c_removal_clears_pending),
+    ("accepted_admin_device_removes_itself", "a device removing itself never creates the next key",
+     c_admin_device_removes_itself),
+    ("fatal_self_removal_with_key", "a leaving member must not create the next key", c_self_leave_with_key),
+    ("fatal_rekey_pending_policy", "no encrypted entries while a rekey is pending", c_pending_policy),
+    ("fatal_rekey_pending_add_member", "no new members while a rekey is pending", c_pending_add),
+    ("accepted_rekey_clears_pending", "an admin's rekey clears the pending flag", c_pending_cleared),
+    ("accepted_non_admin_removes_own_device", "a non-admin's removal leaves a rekey pending", c_own_device),
+    ("accepted_last_member_leaves", "the circle closes", c_last_member),
+    ("rejected_details_unsorted_ids", "an ID list out of order inside details", c_details_unsorted),
+    ("rejected_details_bad_schedule", "a schedule that isn't a multiple of 6 bytes", c_details_schedule),
+    ("accepted_add_member_unsorted_guardians", "member details that don't parse", c_add_unsorted),
+    ("deferred_missing_secret", "a device without the epoch secret defers private rules", c_deferred),
 ]
 for name, desc, fn in EMPTY_CASES:
     case(name, desc, fn, empty=True)
@@ -601,7 +733,7 @@ HEAD6 = bytes.fromhex(B.records[6]["hash"])
 
 RECEIVER_NOW = T0 + 2 * DAY + 5 * MIN
 SERVER_REASONS = {"malformed", "bad_version", "bad_kind", "wrong_circle", "unknown_log_head", "sender_not_active",
-                  "bad_signature", "expired", "replay", "bad_wraps", "bad_ttl"}
+                  "bad_signature", "expired", "bad_time", "replay", "bad_wraps", "bad_ttl"}
 
 
 def open_env(raw, st, me, keys, seen):
@@ -637,12 +769,16 @@ PAUSE_REQ = {"t": "pause_req", "id": b64u(rnd("pause/2", 8)), "kind": 1, "start"
              "end": T0 + 2 * DAY + 3 * HOUR, "note": "Study group at the library"}
 
 valid_envs = []
-for tag, desc, sender, kind, recips, payload in [
-    ("e1", "Jordan's location to the circle", jp, ev.CIRCLE, [ap, mp], LOC),
-    ("e2", "Maya asks her guardian for a pause (direct)", mp, ev.DIRECT, [jp], PAUSE_REQ),
-    ("e3", "Maya shares an approximate location", mp, ev.CIRCLE, [jp, ap], LOC_APPROX),
+for tag, desc, sender, kind, recips, payload, sent in [
+    ("e1", "Jordan's location to the circle", jp, ev.CIRCLE, [ap, mp], LOC, T0 + 2 * DAY),
+    ("e2", "Maya asks her guardian for a pause (direct)", mp, ev.DIRECT, [jp], PAUSE_REQ, T0 + 2 * DAY),
+    ("e3", "Maya shares an approximate location", mp, ev.CIRCLE, [jp, ap], LOC_APPROX, T0 + 2 * DAY),
+    ("e4", "Jordan's location sent exactly 31 days before the receiver's clock: the oldest accepted", jp, ev.CIRCLE,
+     [ap, mp], LOC, RECEIVER_NOW - 31 * DAY),
+    ("e5", "Jordan's location dated exactly 1 day after the receiver's clock: the furthest ahead accepted", jp,
+     ev.CIRCLE, [ap, mp], LOC, RECEIVER_NOW + DAY),
 ]:
-    raw, meta = env(tag, sender, kind, [(d.id, d.dek_pub) for d in recips], payload)
+    raw, meta = env(tag, sender, kind, [(d.id, d.dek_pub) for d in recips], payload, sent_at=sent)
     seen = set()
     rec = []
     for d in recips:
@@ -685,8 +821,10 @@ bad("unknown_log_head", "log head not in the receiver's log", env("ul", jp, 1, b
     ap, "unknown_log_head")
 bad("sender_not_active", "from the removed tablet",
     env("na", jt, 1, [(jp.id, jp.dek_pub)] + both, LOC, head=HEAD6)[0], ap, "sender_not_active")
-bad("expired", "sent 40 days before the receiver's clock", env("ex", jp, 1, both, LOC, sent_at=T0 - 40 * DAY)[0],
-    ap, "expired")
+bad("expired", "sent 31 days and 1 ms before the receiver's clock",
+    env("ex", jp, 1, both, LOC, sent_at=RECEIVER_NOW - 31 * DAY - 1)[0], ap, "expired")
+bad("bad_time", "sent more than a day after the receiver's clock",
+    env("ft", jp, 1, both, LOC, sent_at=RECEIVER_NOW + DAY + 1)[0], ap, "bad_time")
 bad("bad_signature", "seq changed after signing", E1[:36] + bytes([E1[36] ^ 1]) + E1[37:], ap, "bad_signature")
 bad("bad_wraps", "wraps not sorted by device ID", env("ro", jp, 1, both, LOC, reorder=True)[0], ap, "bad_wraps")
 bad("not_a_recipient", "direct envelope for someone else", E2, ap, "not_a_recipient")
@@ -724,6 +862,7 @@ replay_case = dict(name="replay", description="the same envelope delivered twice
 server_rejects = []
 for tag, desc, recips, ttl, reason in [
         ("tt", "ttl_s of 30 seconds (minimum 60)", both, 30, "bad_ttl"),
+        ("tm", "ttl_s one second over 30 days", both, 2_592_001, "bad_ttl"),
         ("ir", "also wrapped to the removed tablet", both + [(jt.id, jt.dek_pub)], 7 * 86400, "bad_wraps")]:
     raw, _ = env(tag, jp, 1, recips, LOC, ttl=ttl)
     try:
@@ -732,7 +871,8 @@ for tag, desc, recips, ttl, reason in [
     except ev.EnvelopeError as e:
         assert e.reason == reason
     assert open_env(raw, S13, ap.id, {bytes.fromhex(a): bytes.fromhex(b) for a, b in ap.keys().items()}, set()) == LOC
-    server_rejects.append(dict(name=reason, description=desc + "; recipients can still open it", log_seq=FINAL,
+    server_rejects.append(dict(name={"tt": "ttl_too_short", "tm": "ttl_too_long", "ir": "inactive_recipient"}[tag],
+                               description=desc + "; recipients can still open it", log_seq=FINAL,
                                raw=raw.hex(), server_error=reason, receiver=ap.label,
                                receiver_device_id=ap.id.hex(), receiver_keys=ap.keys(), payload=LOC))
 

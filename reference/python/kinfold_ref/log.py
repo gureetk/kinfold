@@ -268,6 +268,8 @@ class State:
     members: dict = field(default_factory=dict)      # account_id -> Member
     hashes: list = field(default_factory=list)       # every entry hash, in order
     flags: list = field(default_factory=list)        # (seq, reason) for rejected or bad_details
+    rekey_pending: bool = False                      # a removal that could not start a new epoch (6.4)
+    private_unknown_from: int = None                 # seq where a missing epoch secret froze private state (6.5)
 
     def device(self, did):
         for m in self.members.values():
@@ -342,16 +344,22 @@ def apply(st: State, raw: bytes, secrets=None):
     s = copy.deepcopy(st)
     s.seq, s.head = e.seq, entry_hash(raw)
     s.hashes.append(s.head)
+    private = secrets is not None and s.private_unknown_from is None
+    if private and e.type in (GENESIS, ADD_MEMBER, POLICY) and e.epoch not in secrets:
+        s.private_unknown_from = e.seq            # 6.5: freeze private state until the secret arrives
+        private = False
     result, reason = "accepted", None
     try:
-        _HANDLERS[e.type](s, e, body, author_acc, secrets)
+        _HANDLERS[e.type](s, e, body, author_acc, secrets if private else None)
     except Rejected as rj:
         result, reason = "rejected", rj.reason
         s.flags.append((e.seq, rj.reason))
-    if secrets is not None:
+    if private:
         _repair_guardians(s)
         if result == "accepted":
             reason = next((r for q, r in s.flags if q == e.seq), None)   # accepted but flagged: bad_details
+    elif secrets is not None:
+        result = "deferred"
     return s, result, reason
 
 
@@ -369,6 +377,22 @@ def _check_wraps(e, body, devices):
     if (not strictly_ascending(ids) or len(ids) != len(expected)
             or any(expected.get(rid) != kid for rid, kid, _, _ in wraps)):
         raise Fatal("bad_wraps")
+
+
+def _epoch_body(body, devices, fresh):
+    """A removal by a remaining admin starts a new epoch; any other removal carries no secret (6.4)."""
+    if fresh:
+        _check_wraps(None, body, devices)
+    elif body["commit"] != ZERO32 or body["wraps"]:
+        raise Fatal("bad_wraps")
+
+
+def _advance(s, body, secrets, fresh):
+    if fresh:
+        _new_epoch(s, body, secrets)
+        s.rekey_pending = False
+    else:
+        s.rekey_pending = True
 
 
 def _new_epoch(s, body, secrets):
@@ -416,6 +440,8 @@ def _genesis(s, e, b, author_acc, secrets):
 def _add_member(s, e, b, author_acc, secrets):
     if not s.members[author_acc].admin:
         raise Fatal("not_admin")
+    if s.rekey_pending:
+        raise Fatal("rekey_pending")
     c, bu = b["cert"], b["bundle"]
     if not cert_ok(c):
         raise Fatal("bad_cert")
@@ -456,9 +482,10 @@ def _remove_member(s, e, b, author_acc, secrets):
         raise Fatal("not_admin")
     if s.members[target].admin and len(s.admins()) == 1 and len(s.members) > 1:
         raise Fatal("last_admin")
-    _check_wraps(e, b, [d for d in s.active_devices() if d.account_id != target])
+    fresh = s.members[author_acc].admin and author_acc != target
+    _epoch_body(b, [d for d in s.active_devices() if d.account_id != target], fresh)
     del s.members[target]
-    _new_epoch(s, b, secrets)
+    _advance(s, b, secrets, fresh)
 
 
 def _add_device(s, e, b, author_acc, secrets):
@@ -482,9 +509,10 @@ def _remove_device(s, e, b, author_acc, secrets):
         raise Fatal("not_admin")
     if len(s.members[target.account_id].devices) == 1:
         raise Fatal("last_device")
-    _check_wraps(e, b, [d for d in s.active_devices() if d.device_id != target.device_id])
+    fresh = s.members[author_acc].admin and e.author != target.device_id
+    _epoch_body(b, [d for d in s.active_devices() if d.device_id != target.device_id], fresh)
     del s.members[target.account_id].devices[target.device_id]
-    _new_epoch(s, b, secrets)
+    _advance(s, b, secrets, fresh)
 
 
 def _update_key(s, e, b, author_acc, secrets):
@@ -496,8 +524,11 @@ def _update_key(s, e, b, author_acc, secrets):
 
 
 def _rekey(s, e, b, author_acc, secrets):
+    if not s.members[author_acc].admin:
+        raise Fatal("not_admin")
     _check_wraps(e, b, s.active_devices())
     _new_epoch(s, b, secrets)
+    s.rekey_pending = False
 
 
 def _set_admin(s, e, b, author_acc, secrets):
@@ -512,6 +543,8 @@ def _set_admin(s, e, b, author_acc, secrets):
 
 
 def _policy(s, e, b, author_acc, secrets):
+    if s.rekey_pending:
+        raise Fatal("rekey_pending")
     if secrets is None:
         return                                   # opaque to servers
     pt = open_details(_secret(secrets, s.epoch), e.header, b["details"])
@@ -627,8 +660,9 @@ def state_json(s: State, private: bool = True) -> dict:
                              for pid, (k, a, z) in sorted(m.pauses.items())])
         members.append(d)
     out = dict(circle_id=s.circle_id.hex() if s.circle_id else None, seq=s.seq, head=s.head.hex(),
-               epoch=s.epoch, members=members)
+               epoch=s.epoch, rekey_pending=s.rekey_pending, members=members)
     if private:
         out["name"] = s.name
         out["flags"] = [dict(seq=q, reason=r) for q, r in s.flags]
+        out["private_unknown_from"] = s.private_unknown_from
     return out

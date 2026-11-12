@@ -164,6 +164,7 @@ type state struct {
 	cid, head []byte
 	seq       int64
 	epoch     int
+	pending   bool // rekey_pending (§6.4)
 	members   map[string]*member
 	hashes    map[string]bool
 }
@@ -173,7 +174,7 @@ func newState() *state {
 }
 
 func (s *state) clone() *state {
-	c := &state{cid: s.cid, head: s.head, seq: s.seq, epoch: s.epoch, members: map[string]*member{}, hashes: map[string]bool{}}
+	c := &state{cid: s.cid, head: s.head, seq: s.seq, epoch: s.epoch, pending: s.pending, members: map[string]*member{}, hashes: map[string]bool{}}
 	for k, v := range s.hashes {
 		c.hashes[k] = v
 	}
@@ -299,6 +300,24 @@ func wrapsCover(ws [][]byte, devs []*device) bool {
 	return true
 }
 
+// epochBody checks a removal's new-epoch fields: a removal by an admin who stays starts a new
+// epoch for the remaining devices; any other removal carries no secret at all (§6.4).
+func epochBody(b body, fresh bool, remaining []*device) bool {
+	if fresh {
+		return wrapsCover(b.wraps, remaining)
+	}
+	return bytes.Equal(b.commit, make([]byte, 32)) && len(b.wraps) == 0
+}
+
+func (s *state) advance(fresh bool) {
+	if fresh {
+		s.epoch++
+		s.pending = false
+	} else {
+		s.pending = true
+	}
+}
+
 // apply returns the new state, or the fatal reason code.
 func apply(s0 *state, raw []byte) (*state, string) {
 	r := &reader{b: raw}
@@ -386,6 +405,8 @@ func apply(s0 *state, raw []byte) (*state, string) {
 		switch {
 		case !am.admin:
 			return nil, "not_admin"
+		case s.pending:
+			return nil, "rekey_pending"
 		case !certOK(b.c):
 			return nil, "bad_cert"
 		case !bundleOK(b.bu, b.c.dsk, b.c.acc):
@@ -408,11 +429,13 @@ func apply(s0 *state, raw []byte) (*state, string) {
 			return nil, "not_admin"
 		case tm.admin && s.admins() == 1 && len(s.members) > 1:
 			return nil, "last_admin"
-		case !wrapsCover(b.wraps, s.devices(func(d *device) bool { return bytes.Equal(d.acc, b.tgt) })):
+		}
+		fresh := am.admin && !bytes.Equal(authorAcc, b.tgt)
+		if !epochBody(b, fresh, s.devices(func(d *device) bool { return bytes.Equal(d.acc, b.tgt) })) {
 			return nil, "bad_wraps"
 		}
 		delete(s.members, string(b.tgt))
-		s.epoch++
+		s.advance(fresh)
 	case 4: // ADD_DEVICE
 		switch {
 		case !certOK(b.c):
@@ -434,23 +457,31 @@ func apply(s0 *state, raw []byte) (*state, string) {
 			return nil, "not_admin"
 		case len(s.members[string(td.acc)].devs) == 1:
 			return nil, "last_device"
-		case !wrapsCover(b.wraps, s.devices(func(d *device) bool { return bytes.Equal(d.id, b.tgt) })):
+		}
+		fresh := am.admin && !bytes.Equal(author, b.tgt)
+		if !epochBody(b, fresh, s.devices(func(d *device) bool { return bytes.Equal(d.id, b.tgt) })) {
 			return nil, "bad_wraps"
 		}
 		delete(s.members[string(td.acc)].devs, string(b.tgt))
-		s.epoch++
+		s.advance(fresh)
 	case 6: // UPDATE_KEY
 		d := s.device(author)
 		if !bundleOK(b.bu, d.dsk, d.acc) || bytes.Equal(b.bu.keyID(), d.b.keyID()) {
 			return nil, "bad_bundle"
 		}
 		d.b = b.bu
-	case 7: // POLICY: opaque to servers
+	case 7: // POLICY: its content is opaque to servers
+		if s.pending {
+			return nil, "rekey_pending"
+		}
 	case 8: // REKEY
+		if !am.admin {
+			return nil, "not_admin"
+		}
 		if !wrapsCover(b.wraps, s.devices(nil)) {
 			return nil, "bad_wraps"
 		}
-		s.epoch++
+		s.advance(true)
 	case 9: // SET_ADMIN
 		tm := s.members[string(b.tgt)]
 		switch {
@@ -482,7 +513,7 @@ func (s *state) publicJSON() any {
 		}
 		members = append(members, map[string]any{"account_id": hex.EncodeToString(m.acc), "admin": m.admin, "devices": devs})
 	}
-	out := map[string]any{"seq": s.seq, "head": hex.EncodeToString(s.head), "epoch": s.epoch, "members": members,
+	out := map[string]any{"seq": s.seq, "head": hex.EncodeToString(s.head), "epoch": s.epoch, "rekey_pending": s.pending, "members": members,
 		"circle_id": nil}
 	if s.cid != nil {
 		out["circle_id"] = hex.EncodeToString(s.cid)
@@ -525,6 +556,9 @@ func envelopeCheck(s *state, raw []byte, seen map[string]bool, now uint64) strin
 	}
 	if sentAt+maxAgeMS < now {
 		return "expired"
+	}
+	if sentAt > now+86_400_000 {
+		return "bad_time"
 	}
 	key := fmt.Sprintf("%x/%d", sender, seq)
 	if seen[key] {
@@ -579,6 +613,7 @@ func publicOnly(st any) any {
 	m := normalize(st).(map[string]any)
 	delete(m, "name")
 	delete(m, "flags")
+	delete(m, "private_unknown_from")
 	for _, mem := range arr(m["members"]) {
 		for _, k := range []string{"role", "teen_until", "guardians", "rules", "pauses"} {
 			delete(obj(mem), k)
@@ -687,7 +722,7 @@ func main() {
 
 	serverReasons := map[string]bool{"malformed": true, "bad_version": true, "bad_kind": true, "wrong_circle": true,
 		"unknown_log_head": true, "sender_not_active": true, "bad_signature": true, "expired": true, "replay": true,
-		"bad_wraps": true, "bad_ttl": true}
+		"bad_wraps": true, "bad_ttl": true, "bad_time": true}
 	now := uint64(obj(v["envelopes"])["receiver_now"].(float64))
 	env := obj(v["envelopes"])
 	for _, t := range arr(env["valid"]) {

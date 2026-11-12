@@ -205,9 +205,13 @@ await attempt('hpke', async () => {
 
 const L = V.log;
 const baseSecrets = new Map(Object.entries(L.epoch_secrets).map(([k, v]) => [Number(k), X(v)]));
+// vectors/README.md: the public state is the state JSON without these private fields.
+const PRIVATE_STATE_FIELDS = ['name', 'flags', 'private_unknown_from'];
+const PRIVATE_MEMBER_FIELDS = ['role', 'teen_until', 'guardians', 'rules', 'pauses'];
+const without = (o, keys) => Object.fromEntries(Object.entries(o).filter(([k]) => !keys.includes(k)));
 const publicSubset = st => ({
-  circle_id: st.circle_id, seq: st.seq, head: st.head, epoch: st.epoch,
-  members: st.members.map(m => ({ account_id: m.account_id, admin: m.admin, devices: m.devices })),
+  ...without(st, PRIVATE_STATE_FIELDS),
+  members: st.members.map(m => without(m, PRIVATE_MEMBER_FIELDS)),
 });
 
 /** Decrypt an entry's details with the known epoch secrets (for details_plaintext checks). */
@@ -218,14 +222,18 @@ async function decryptDetails(raw, secrets) {
   return K.openDetailsWith(secrets.get(e.epoch), e.header, b.details);
 }
 
-/** Checks shared by main-log entries and case entries. Returns the new {client, pub} states. */
-async function checkEntry(tag, ent, states, secrets) {
+/**
+ * Checks shared by main-log entries and case entries. `secrets` are what the client under test
+ * holds (a case's withheld epochs removed); `allSecrets` also open withheld details for the
+ * details_plaintext check. Returns the new {client, pub} states.
+ */
+async function checkEntry(tag, ent, states, secrets, allSecrets = secrets) {
   const raw = X(ent.raw);
   checkEq(`${tag} hash`, toHex(await K.entryHash(raw)), ent.hash);
   const rc = await K.processEntry(states.client, raw, { mode: 'client', secrets });
   const rp = await K.processEntry(states.pub, raw, { mode: 'public' });
   checkEq(`${tag} client outcome`, [rc.result, rc.reason], [ent.result, ent.reason]);
-  if (rc.result !== 'fatal') check(`${tag} client held a usable secret`, !rc.privateUnknown);
+  if (rc.result !== 'fatal') check(`${tag} private state frozen exactly when deferred`, rc.privateUnknown === (ent.result === 'deferred'));
   checkEq(`${tag} public outcome`, [rp.result, rp.reason], [ent.public_result, ent.public_reason]);
   if (rc.result !== 'fatal') checkEq(`${tag} seq field`, Number(rc.entry.seq), ent.seq);
   const authorDev = devices.get(ent.author);
@@ -239,9 +247,10 @@ async function checkEntry(tag, ent, states, secrets) {
     checkEq(`${tag} fatal leaves public state unchanged`, K.stateToJSON(rp.state, { publicOnly: true }), K.stateToJSON(states.pub, { publicOnly: true }));
   }
   if ('details_plaintext' in ent) {
-    const pt = await attempt(`${tag} details decrypt`, () => decryptDetails(raw, secrets));
-    if (ent.reason === 'bad_details') check(`${tag} details do not decrypt under the circle's key`, pt === null);
-    else checkEq(`${tag} details_plaintext`, pt ? toHex(pt) : null, ent.details_plaintext);
+    // Details either open to details_plaintext, or don't open at all (then the outcome is bad_details).
+    const pt = await attempt(`${tag} details decrypt`, () => decryptDetails(raw, allSecrets));
+    if (pt === null) check(`${tag} details that don't open under the circle's key give bad_details`, ent.reason === 'bad_details');
+    else checkEq(`${tag} details_plaintext`, toHex(pt), ent.details_plaintext);
   }
   if ('invite_secret' in ent) {
     const b = K.parseEntryBody(K.parseEntryFraming(raw).type, K.parseEntryFraming(raw).body);
@@ -280,16 +289,19 @@ const preStates = [];  // client state before each main entry
 }
 
 group('log cases');
-const caseCounts = { fatal: 0, rejected: 0, accepted: 0 };
+const caseCounts = { fatal: 0, rejected: 0, accepted: 0, deferred: 0 };
 let emptyLogCases = 0;
 for (const c of L.cases) {
   await attempt(`case ${c.name}`, async () => {
-    const secrets = new Map(baseSecrets);
-    for (const [k, v] of Object.entries(c.new_epoch_secrets ?? {})) secrets.set(Number(k), X(v));
+    const allSecrets = new Map(baseSecrets);
+    for (const [k, v] of Object.entries(c.new_epoch_secrets ?? {})) allSecrets.set(Number(k), X(v));
+    // `withheld_epochs`: the client under test never received these secrets (§6.5).
+    const secrets = new Map(allSecrets);
+    for (const ep of c.withheld_epochs ?? []) secrets.delete(Number(ep));
     if (c.base_seq === -1) emptyLogCases++;
     let states = c.base_seq === -1 ? { client: K.emptyState(), pub: K.emptyState() } : { ...mainStates[c.base_seq] };
     for (const [i, ent] of c.entries.entries()) {
-      const r = await checkEntry(`case ${c.name} [${i}]`, ent, states, secrets);
+      const r = await checkEntry(`case ${c.name} [${i}]`, ent, states, secrets, allSecrets);
       states = { client: r.client, pub: r.pub };
     }
     const last = c.entries.at(-1);
@@ -302,8 +314,8 @@ for (const c of L.cases) {
     }
   });
 }
-checkEq('case counts (§17: 31 fatal, 13 rejected, 8 accepted; 5 on an empty log)',
-  { ...caseCounts, emptyLog: emptyLogCases }, { fatal: 31, rejected: 13, accepted: 8, emptyLog: 5 });
+checkEq('case counts (§17: 36 fatal, 15 rejected, 15 accepted, 1 deferred; 5 on an empty log)',
+  { ...caseCounts, emptyLog: emptyLogCases }, { fatal: 36, rejected: 15, accepted: 15, deferred: 1, emptyLog: 5 });
 
 // ---------------------------------------------------------------------------
 // Epoch wraps: every recipient opens its wrap and checks the commitment
@@ -374,8 +386,11 @@ for (const [i, ent] of L.entries.entries()) {
         break;
       }
       case K.ENTRY.REMOVE_MEMBER:
-        nb = { account_id: b.account_id, epoch_commit: await K.epochCommit(e.epoch + 1, X(ent.new_epoch_secret)),
-          wraps: await epochWraps(active.filter(d => !bytesEqual(d.account_id, b.account_id))) };
+        // A removal that starts no epoch (§6.4) carries a zero commitment and no wraps.
+        nb = ent.new_epoch_secret
+          ? { account_id: b.account_id, epoch_commit: await K.epochCommit(e.epoch + 1, X(ent.new_epoch_secret)),
+            wraps: await epochWraps(active.filter(d => !bytesEqual(d.account_id, b.account_id))) }
+          : { account_id: b.account_id, epoch_commit: new Uint8Array(32), wraps: [] };
         break;
       case K.ENTRY.ADD_DEVICE: {
         const dev = devicesById.get(toHex(await K.deviceIdOf(b.cert.dsk_pub)));
@@ -383,8 +398,10 @@ for (const [i, ent] of L.entries.entries()) {
         break;
       }
       case K.ENTRY.REMOVE_DEVICE:
-        nb = { device_id: b.device_id, epoch_commit: await K.epochCommit(e.epoch + 1, X(ent.new_epoch_secret)),
-          wraps: await epochWraps(active.filter(d => !bytesEqual(d.device_id, b.device_id))) };
+        nb = ent.new_epoch_secret
+          ? { device_id: b.device_id, epoch_commit: await K.epochCommit(e.epoch + 1, X(ent.new_epoch_secret)),
+            wraps: await epochWraps(active.filter(d => !bytesEqual(d.device_id, b.device_id))) }
+          : { device_id: b.device_id, epoch_commit: new Uint8Array(32), wraps: [] };
         break;
       case K.ENTRY.UPDATE_KEY:
         nb = { bundle: identityBundleFor(author, b.bundle.dek_pub) };
@@ -412,7 +429,7 @@ group('envelopes');
 const NOW = V.envelopes.receiver_now;
 // §7.5: a server runs §7.6 steps 1-10 (these codes), then its own wrap and ttl checks.
 const STEP_1_TO_10_CODES = new Set(['malformed', 'bad_version', 'bad_kind', 'wrong_circle', 'unknown_log_head',
-  'sender_not_active', 'bad_signature', 'expired', 'replay', 'bad_wraps']);
+  'sender_not_active', 'bad_signature', 'expired', 'bad_time', 'replay', 'bad_wraps']);
 const receiverCtx = async (logSeq, deviceId, keyMap) =>
   ({ state: mainStates[logSeq].client, now: NOW, deviceId: X(deviceId), keys: await keysFor(keyMap), replay: K.newReplayRecord() });
 // The server works from the public state only.
@@ -763,14 +780,20 @@ await attempt('fresh round trips', async () => {
     const res = await K.receiveEnvelope({ state: st, now: 1793808070000, deviceId: d.device_id, keys: keysOf(d), replay: K.newReplayRecord() }, raw);
     check(`fresh envelope opened by ${devicesById.get(toHex(d.device_id)).label}`, res.ok && bytesEqual(res.payloadBytes, payload), res.error);
   }
-  // A REKEY by Maya with a fresh secret, processed in both modes and opened by every device.
-  const maya = devices.get('maya/phone');
+  // A REKEY by Jordan (an admin) with a fresh secret, processed in both modes and opened by every
+  // device; the same entry from Maya (not an admin) is fatal.
+  const jordan = devices.get('jordan/phone');
   const secret = K.randomBytes(32);
-  const header = { type: K.ENTRY.REKEY, circle_id: st.circle_id, seq: st.seq + 1n, prev_hash: st.head, created_at: 1793808120000n, author: X(maya.device_id), epoch: st.epoch };
-  const wraps = await K.sealWraps(K.activeDevices(st), secret,
-    r => K.epochWrapInfo(header.circle_id, header.seq, header.prev_hash, header.epoch + 1, r.device_id, r.key_id));
-  const rekey = await K.buildEntry(header, K.serializeEntryBody(K.ENTRY.REKEY, { epoch_commit: await K.epochCommit(st.epoch + 1, secret), wraps }), maya.signer);
+  const buildRekey = async dev => {
+    const hdr = { type: K.ENTRY.REKEY, circle_id: st.circle_id, seq: st.seq + 1n, prev_hash: st.head, created_at: 1793808120000n, author: X(dev.device_id), epoch: st.epoch };
+    const wr = await K.sealWraps(K.activeDevices(st), secret,
+      r => K.epochWrapInfo(hdr.circle_id, hdr.seq, hdr.prev_hash, hdr.epoch + 1, r.device_id, r.key_id));
+    return { hdr, raw: await K.buildEntry(hdr, K.serializeEntryBody(K.ENTRY.REKEY, { epoch_commit: await K.epochCommit(st.epoch + 1, secret), wraps: wr }), dev.signer) };
+  };
+  const { hdr: header, raw: rekey } = await buildRekey(jordan);
   const secrets = new Map(baseSecrets).set(st.epoch + 1, secret);
+  const byMaya = await K.processEntry(st, (await buildRekey(devices.get('maya/phone'))).raw, { mode: 'public' });
+  checkEq('fresh REKEY by a non-admin is fatal', [byMaya.result, byMaya.reason], ['fatal', 'not_admin']);
   const rc = await K.processEntry(st, rekey, { mode: 'client', secrets });
   const rp = await K.processEntry(mainStates[L.final_seq].pub, rekey, { mode: 'public' });
   checkEq('fresh REKEY outcome (client, public)', [rc.result, rp.result, rc.state.epoch], ['accepted', 'accepted', st.epoch + 1]);
@@ -780,16 +803,16 @@ await attempt('fresh round trips', async () => {
     check(`fresh epoch wrap opened by ${devicesById.get(toHex(d.device_id)).label}`, o.secret && bytesEqual(o.secret, secret), o.error);
   }
   // A rename by Jordan in the new epoch, details sealed with a random nonce.
-  const jordan = devices.get('jordan/phone');
-  const h2 = { type: K.ENTRY.POLICY, circle_id: st.circle_id, seq: header.seq + 1n, prev_hash: rc.hash, created_at: 1793808180000n, author: X(jordan.device_id), epoch: st.epoch + 1 };
+  const h2 ={ type: K.ENTRY.POLICY, circle_id: st.circle_id, seq: header.seq + 1n, prev_hash: rc.hash, created_at: 1793808180000n, author: X(jordan.device_id), epoch: st.epoch + 1 };
   const name = 'Rivera–Okafor family';
   const det = await K.sealDetails(secret, K.serializeEntryHeader(h2), concat(K.u8(K.POLICY_SUBTYPE.SET_CIRCLE_NAME), K.vec16(utf8(name))));
   const rename = await K.buildEntry(h2, K.serializeEntryBody(K.ENTRY.POLICY, { details: det }), jordan.signer);
   const r2 = await K.processEntry(rc.state, rename, { mode: 'client', secrets });
   checkEq('fresh rename accepted in the new epoch', [r2.result, r2.state.name], ['accepted', name]);
   const r3 = await K.processEntry(rc.state, rename, { mode: 'client', secrets: baseSecrets });
-  checkEq('same rename without the new epoch secret: public effects only, private state unknown (§6.5)',
-    [r3.result, r3.reason, r3.privateUnknown, K.stateToJSON(r3.state).name], ['accepted', null, true, null]);
+  checkEq('same rename without the new epoch secret: deferred, private state frozen at its last known values (§6.5)',
+    [r3.result, r3.reason, K.stateToJSON(r3.state).name, K.stateToJSON(r3.state).private_unknown_from],
+    ['deferred', null, K.stateToJSON(rc.state).name, Number(h2.seq)]);
 });
 
 // ---------------------------------------------------------------------------
@@ -808,26 +831,59 @@ await attempt('missing secrets', async () => {
     }
     return { st, results };
   };
-  const epochOf = i => K.parseEntryFraming(X(L.entries[i].raw)).epoch;
-  const firstOfEpoch = ep => L.entries.findIndex((_, i) => epochOf(i) === ep);
+  const parsed = L.entries.map(ent => K.parseEntryFraming(X(ent.raw)));
+  const withDetails = t => t === K.ENTRY.GENESIS || t === K.ENTRY.ADD_MEMBER || t === K.ENTRY.POLICY;
+  // Only entries with details need a secret, so the freeze starts at the first of those in the epoch.
+  const firstNeeding = ep => parsed.findIndex(e => e.epoch === ep && withDetails(e.type));
   const scenarios = [
-    { name: 'only the epoch-0 secret', secrets: new Map([[0, baseSecrets.get(0)]]), from: firstOfEpoch(1) },
-    { name: 'a wrong epoch-2 secret (discarded)', secrets: new Map(baseSecrets).set(2, baseSecrets.get(1)), from: firstOfEpoch(2) },
+    { name: 'only the epoch-0 secret', secrets: new Map([[0, baseSecrets.get(0)]]), from: firstNeeding(1) },
+    { name: 'a wrong epoch-2 secret (discarded)', secrets: new Map(baseSecrets).set(2, baseSecrets.get(1)), from: firstNeeding(2) },
     { name: 'a wrong epoch-0 secret (discarded)', secrets: new Map(baseSecrets).set(0, baseSecrets.get(2)), from: 0 },
   ];
+  // The frozen state: public fields as the log goes on, private fields as they were before the freeze.
+  const frozenExpectation = (i, from) => {
+    const now = L.entries[i].state_after;
+    const before = from > 0 ? L.entries[from - 1].state_after : { name: '', flags: [], members: [] };
+    const priv = new Map(before.members.map(m => [m.account_id, m]));
+    const dflt = { role: 'adult', teen_until: 0, guardians: [], rules: null, pauses: [] };
+    return {
+      ...publicSubset(now), name: before.name, flags: before.flags, private_unknown_from: from,
+      members: now.members.map(m => {
+        const p = priv.get(m.account_id) ?? dflt;
+        return { account_id: m.account_id, admin: m.admin, devices: m.devices, role: p.role, teen_until: p.teen_until, guardians: p.guardians, rules: p.rules, pauses: p.pauses };
+      }),
+    };
+  };
   for (const sc of scenarios) {
     const { st, results } = await replayWith(sc.secrets);
-    const firstUnknown = results.findIndex(r => r.privateUnknown);
-    checkEq(`${sc.name}: private state unknown from the first entry without a usable secret`, firstUnknown, sc.from);
-    check(`${sc.name}: no bad_details or rejection from a missing secret`,
-      results.every((r, i) => i < sc.from || (r.result === 'accepted' && r.reason === null)));
+    checkEq(`${sc.name}: the first deferred entry is the first one with details in that epoch`, results.findIndex(r => r.result === 'deferred'), sc.from);
+    check(`${sc.name}: before it, outcomes and state match the vectors`, results.every((r, i) =>
+      i >= sc.from || (r.result === L.entries[i].result && r.reason === L.entries[i].reason && canon(K.stateToJSON(r.state)) === canon(L.entries[i].state_after))));
+    check(`${sc.name}: from it on, every entry is deferred (never bad_details or rejected)`,
+      results.every((r, i) => i < sc.from || (r.result === 'deferred' && r.reason === null)));
     check(`${sc.name}: public state unaffected`, results.every((r, i) =>
       canon(K.stateToJSON(r.state, { publicOnly: true })) === canon(publicSubset(L.entries[i].state_after))));
-    check(`${sc.name}: private state unaffected before that entry`, results.every((r, i) =>
-      i >= sc.from || canon(K.stateToJSON(r.state)) === canon(L.entries[i].state_after)));
-    checkEq(`${sc.name}: reported as unknown`, { name: K.stateToJSON(st).name, from: K.stateToJSON(st).private_unknown_from }, { name: null, from: sc.from });
+    check(`${sc.name}: frozen private fields keep their last known values`, results.every((r, i) =>
+      i < sc.from || canon(K.stateToJSON(r.state)) === canon(frozenExpectation(i, sc.from))));
     const resumed = await K.resumePrivate(st, baseSecrets);
     checkEq(`${sc.name}: once the secret arrives, re-running the private rules gives the full state`, K.stateToJSON(resumed), L.entries.at(-1).state_after);
+  }
+  // The vectors' deferred case, resumed once the withheld secret arrives.
+  const dc = L.cases.find(c => c.withheld_epochs?.length);
+  if (check('a case withholds an epoch secret', !!dc)) {
+    const all = new Map(baseSecrets);
+    for (const [k, v] of Object.entries(dc.new_epoch_secrets ?? {})) all.set(Number(k), X(v));
+    const held = new Map(all);
+    for (const ep of dc.withheld_epochs) held.delete(Number(ep));
+    let frozen = mainStates[dc.base_seq].client;
+    let full = mainStates[dc.base_seq].client;
+    for (const ent of dc.entries) {
+      frozen = (await K.processEntry(frozen, X(ent.raw), { mode: 'client', secrets: held })).state;
+      full = (await K.processEntry(full, X(ent.raw), { mode: 'client', secrets: all })).state;
+    }
+    checkEq(`${dc.name}: resuming with the withheld secret equals processing with every secret`,
+      K.stateToJSON(await K.resumePrivate(frozen, all)), K.stateToJSON(full));
+    check(`${dc.name}: and then nothing is frozen`, K.stateToJSON(full).private_unknown_from === null);
   }
 });
 

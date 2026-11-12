@@ -6,7 +6,7 @@ It exists to define and generate the test vectors. It is not for production: it 
 
 ```sh
 pip install --require-hashes -r requirements.txt                       # pyca/cryptography and its dependencies
-python3 check_vectors.py ../../spec/vectors/kinfold-v0.json             # 423 checks
+python3 check_vectors.py ../../spec/vectors/kinfold-v0.json             # 570 checks
 python3 gen_vectors.py OUT.json RFC9180-test-vectors.json               # deterministic
 ```
 

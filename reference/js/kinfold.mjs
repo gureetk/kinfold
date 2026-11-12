@@ -721,8 +721,8 @@ export function parsePolicy(pt) {
 export function emptyState() {
   return {
     empty: true, circle_id: null, seq: -1n, head: new Uint8Array(32), hashes: new Set(),
-    epoch: 0, commits: new Map(), members: new Map(), name: '', flags: [],
-    // §6.5 "Missing secrets": set while private state is unknown, as
+    epoch: 0, commits: new Map(), rekey_pending: false, members: new Map(), name: '', flags: [],
+    // §6.5 "Missing secrets": set while private state is frozen, as
     // { from: seq, epoch, checkpoint: client state before that entry, entries: [raw, …] }.
     locked: null,
   };
@@ -878,10 +878,11 @@ function policyDecision(state, e, authorMember, pt) {
  *                of step 10: what a server runs)
  *   opts.secrets Map epoch -> 32-byte epoch secret (client mode). A secret is used only if it
  *                matches the log's epoch_commit (§6.5 "Missing secrets").
- * Returns { result: 'accepted'|'rejected'|'fatal', reason, state, entry, body, hash, privateUnknown }.
- * A fatal entry returns the input state unchanged. When a client lacks the secret for an
- * entry's epoch (or its private state is already unknown), only public effects are applied,
- * `privateUnknown` is true and `state.locked` records where to resume (see resumePrivate).
+ * Returns { result: 'accepted'|'rejected'|'deferred'|'fatal', reason, state, entry, body, hash,
+ * privateUnknown }. A fatal entry returns the input state unchanged. When a client lacks the
+ * secret for an entry with details (GENESIS, ADD_MEMBER, POLICY), that entry and every later
+ * one are `deferred`: public effects only, private state frozen at its last known values, and
+ * `state.locked` records where to resume (see resumePrivate).
  */
 export async function processEntry(state, raw, opts = {}) {
   const client = (opts.mode ?? 'client') === 'client';
@@ -926,16 +927,18 @@ export async function processEntry(state, raw, opts = {}) {
   // 7: signature
   if (!await verify(authorPub, 'log-entry', e.signed, e.sig)) return fatal('bad_signature');
 
-  // §6.5 "Missing secrets": private rules run only with a secret that matches the commitment
-  // and only while private state is known; otherwise this entry gets its public effects only.
+  // §6.5 "Missing secrets": only entries with details need their epoch's secret, and only one
+  // that matches the commitment counts. Without it, this entry and every later one are deferred.
+  const hasDetails = e.type === ENTRY.GENESIS || e.type === ENTRY.ADD_MEMBER || e.type === ENTRY.POLICY;
   let secret = null;
   let lockHere = false;
-  if (client && !state.locked) {
+  if (client && !state.locked && hasDetails) {
     const commits = e.type === ENTRY.GENESIS ? new Map([[0, b.epoch_commit]]) : state.commits;
     secret = await verifiedEpochSecret(commits, secrets, e.epoch);
     lockHere = !secret;
   }
-  const priv = client && !!secret;
+  const deferred = client && (!!state.locked || lockHere);
+  const priv = client && !deferred;
 
   // 8-10: public rules, private rules, effects
   const s = cloneState(state);
@@ -944,7 +947,15 @@ export async function processEntry(state, raw, opts = {}) {
   const flag = r => { reason = r; s.flags.push({ seq: e.seq, reason: r }); };
   const authorMember = author?.member;
   const authorInClone = () => s.members.get(toHex(authorMember.account_id));
-  const advanceEpoch = commit => { s.epoch = e.epoch + 1; s.commits.set(s.epoch, commit); };
+  // A removal that starts an epoch is a rekey too, so like REKEY it clears a pending rekey (see report).
+  const advanceEpoch = commit => { s.epoch = e.epoch + 1; s.commits.set(s.epoch, commit); s.rekey_pending = false; };
+  // §6.4: a removal by a non-admin, or of the author's own membership or device, starts no
+  // epoch: it carries an all-zero commitment and no wraps, and leaves a rekey pending.
+  const noEpochRemoval = () => {
+    if (!isZero(b.epoch_commit) || b.wraps.length !== 0) return false;
+    s.rekey_pending = true;
+    return true;
+  };
 
   switch (e.type) {
     case ENTRY.GENESIS: {
@@ -975,6 +986,7 @@ export async function processEntry(state, raw, opts = {}) {
     case ENTRY.ADD_MEMBER: {
       const { cert, bundle } = b;
       if (!authorMember.admin) return fatal('not_admin');
+      if (state.rekey_pending) return fatal('rekey_pending');
       if (!await deviceCertValid(cert)) return fatal('bad_cert');
       if (!await keyBundleValidFor(bundle, cert.dsk_pub, cert.account_id)) return fatal('bad_bundle');
       if (state.members.has(toHex(cert.account_id))) return fatal('already_member');
@@ -1003,12 +1015,17 @@ export async function processEntry(state, raw, opts = {}) {
     case ENTRY.REMOVE_MEMBER: {
       const target = state.members.get(toHex(b.account_id));
       if (!target) return fatal('not_member');
-      if (!(authorMember.admin || bytesEqual(authorMember.account_id, b.account_id))) return fatal('not_admin');
+      const selfRemoval = bytesEqual(authorMember.account_id, b.account_id);
+      if (!(authorMember.admin || selfRemoval)) return fatal('not_admin');
       if (target.admin && countAdmins(state) === 1 && state.members.size !== 1) return fatal('last_admin');
-      const required = activeDevices(state).filter(d => !bytesEqual(d.account_id, b.account_id));
-      if (!wrapsCover(b.wraps, required)) return fatal('bad_wraps');
+      if (authorMember.admin && !selfRemoval) {
+        const required = activeDevices(state).filter(d => !bytesEqual(d.account_id, b.account_id));
+        if (!wrapsCover(b.wraps, required)) return fatal('bad_wraps');
+        advanceEpoch(b.epoch_commit);
+      } else if (!noEpochRemoval()) {
+        return fatal('bad_wraps');
+      }
       s.members.delete(toHex(b.account_id));
-      advanceEpoch(b.epoch_commit);
       break;
     }
 
@@ -1028,10 +1045,14 @@ export async function processEntry(state, raw, opts = {}) {
       if (!f) return fatal('unknown_device');
       if (!(bytesEqual(f.member.account_id, authorMember.account_id) || authorMember.admin)) return fatal('not_admin');
       if (f.member.devices.size === 1) return fatal('last_device');
-      const required = activeDevices(state).filter(d => !bytesEqual(d.device_id, b.device_id));
-      if (!wrapsCover(b.wraps, required)) return fatal('bad_wraps');
+      if (authorMember.admin && !bytesEqual(b.device_id, author.device.device_id)) {
+        const required = activeDevices(state).filter(d => !bytesEqual(d.device_id, b.device_id));
+        if (!wrapsCover(b.wraps, required)) return fatal('bad_wraps');
+        advanceEpoch(b.epoch_commit);
+      } else if (!noEpochRemoval()) {
+        return fatal('bad_wraps');
+      }
       s.members.get(toHex(f.member.account_id)).devices.delete(toHex(b.device_id));
-      advanceEpoch(b.epoch_commit);
       break;
     }
 
@@ -1045,6 +1066,7 @@ export async function processEntry(state, raw, opts = {}) {
     }
 
     case ENTRY.POLICY: {
+      if (state.rekey_pending) return fatal('rekey_pending');
       if (priv) {
         const pt = await openDetailsWith(secret, e.header, b.details);
         const decision = policyDecision(state, e, authorMember, pt);
@@ -1055,6 +1077,7 @@ export async function processEntry(state, raw, opts = {}) {
     }
 
     case ENTRY.REKEY: {
+      if (!authorMember.admin) return fatal('not_admin');
       if (!wrapsCover(b.wraps, activeDevices(state))) return fatal('bad_wraps');
       advanceEpoch(b.epoch_commit);
       break;
@@ -1078,8 +1101,9 @@ export async function processEntry(state, raw, opts = {}) {
     if (state.locked) s.locked = { ...state.locked, entries: [...state.locked.entries, raw.slice()] };
     else if (lockHere) s.locked = { from: e.seq, epoch: e.epoch, checkpoint: state, entries: [raw.slice()] };
   }
+  if (deferred) { result = 'deferred'; reason = null; }
   if (priv) guardianRepair(s);
-  return { result, reason, state: s, entry: e, body: b, hash, privateUnknown: client && !priv };
+  return { result, reason, state: s, entry: e, body: b, hash, privateUnknown: deferred };
 }
 
 /**
@@ -1101,11 +1125,10 @@ export async function resumePrivate(state, secrets) {
 
 /**
  * The state as the JSON object used by the test vectors (§6.1, vectors/README.md). While
- * private state is unknown (§6.5) the private fields are null and `private_unknown_from`
- * gives the seq where it became unknown.
+ * private state is frozen (§6.5) the private fields keep their last known values and
+ * `private_unknown_from` gives the seq where it froze; otherwise it is null.
  */
 export function stateToJSON(s, { publicOnly = false } = {}) {
-  const unknown = !!s.locked;
   const members = [...s.members.values()]
     .sort((a, b) => compareBytes(a.account_id, b.account_id))
     .map(m => {
@@ -1114,7 +1137,6 @@ export function stateToJSON(s, { publicOnly = false } = {}) {
         .map(d => ({ device_id: toHex(d.device_id), kind: d.kind, key_id: toHex(d.key_id) }));
       const pub = { account_id: toHex(m.account_id), admin: m.admin, devices };
       if (publicOnly) return pub;
-      if (unknown) return { ...pub, role: null, teen_until: null, guardians: null, rules: null, pauses: null };
       return {
         ...pub,
         role: m.role,
@@ -1125,11 +1147,14 @@ export function stateToJSON(s, { publicOnly = false } = {}) {
           .map(([id, p]) => ({ id, kind: p.kind, start: Number(p.start), end: Number(p.end) })),
       };
     });
-  const out = { circle_id: s.circle_id ? toHex(s.circle_id) : null, seq: Number(s.seq), head: toHex(s.head), epoch: s.epoch, members };
+  const out = {
+    circle_id: s.circle_id ? toHex(s.circle_id) : null, seq: Number(s.seq), head: toHex(s.head), epoch: s.epoch,
+    rekey_pending: !!s.rekey_pending, members,
+  };
   if (!publicOnly) {
-    out.name = unknown ? null : s.name;
-    out.flags = unknown ? null : s.flags.map(f => ({ seq: Number(f.seq), reason: f.reason }));
-    if (unknown) out.private_unknown_from = Number(s.locked.from);
+    out.name = s.name;
+    out.flags = s.flags.map(f => ({ seq: Number(f.seq), reason: f.reason }));
+    out.private_unknown_from = s.locked ? Number(s.locked.from) : null;
   }
   return out;
 }
@@ -1210,7 +1235,8 @@ export function parsePayloadJSON(bytes) {
   return obj;
 }
 
-export const MAX_ENVELOPE_AGE_MS = 2678400000n; // 31 days (§7.6 step 8)
+export const MAX_ENVELOPE_AGE_MS = 2678400000n; // 31 days (§7.6 step 8, expired)
+export const MAX_CLOCK_AHEAD_MS = 86400000n;     // 1 day (§7.6 step 8, bad_time)
 export const TTL_MIN_S = 60;
 export const TTL_MAX_S = 2592000;
 
@@ -1234,7 +1260,9 @@ async function envelopeSteps1to10(ctx, raw) {
   const sender = findDevice(ctx.state, v.sender_device_id);
   if (!sender) return { error: 'sender_not_active' };
   if (!await verify(sender.device.dsk_pub, 'envelope', v.signed, v.sig)) return { error: 'bad_signature' };
-  if (BigInt(ctx.now) - v.sent_at > MAX_ENVELOPE_AGE_MS) return { error: 'expired' };
+  const now = BigInt(ctx.now ?? Date.now());
+  if (now - v.sent_at > MAX_ENVELOPE_AGE_MS) return { error: 'expired' };
+  if (v.sent_at - now > MAX_CLOCK_AHEAD_MS) return { error: 'bad_time' };
   const replayKey = `${toHex(v.sender_device_id)}:${v.seq}`;
   if (ctx.replay.has(replayKey)) return { error: 'replay' };
   if (v.wraps.length === 0 || !wrapsAscending(v.wraps)) return { error: 'bad_wraps' };

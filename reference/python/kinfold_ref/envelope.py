@@ -87,6 +87,7 @@ def parse_envelope(raw: bytes) -> dict:
 
 
 MAX_AGE_MS = 31 * 86_400_000         # 30-day maximum TTL plus a day of clock skew
+MAX_AHEAD_MS = 86_400_000            # sent_at at most a day ahead of the receiver's clock
 TTL_MIN, TTL_MAX = 60, 2_592_000
 
 
@@ -111,6 +112,8 @@ def _common_checks(raw: bytes, state, now: int, seen: set) -> dict:
         raise EnvelopeError("bad_signature")
     if env["sent_at"] + MAX_AGE_MS < now:
         raise EnvelopeError("expired")
+    if env["sent_at"] > now + MAX_AHEAD_MS:
+        raise EnvelopeError("bad_time")
     if (env["sender"], env["seq"]) in seen:
         raise EnvelopeError("replay")
     wraps = env["wraps"]
