@@ -1,0 +1,24 @@
+DRAFT — to be reviewed by someone who handles open-source licensing before the first app release.
+
+Additional permission under GNU GPL version 3 section 7
+
+As an additional permission under section 7 of the GNU General Public License,
+version 3 ("GPL"), the copyright holders of this program give you permission to
+convey this program, or a work based on it, in object code form through an
+application store or similar distribution service (such as Apple's App Store or
+Google Play) even where that service's terms of use, usage rules or digital
+rights management place restrictions on recipients that would otherwise be
+further restrictions under section 10 of the GPL, provided that:
+
+  1. you also make the Corresponding Source of the version you convey available,
+     free of charge and under the terms of the GPL, from a publicly accessible
+     network location, for as long as you offer that version through the
+     service; and
+
+  2. you impose no restriction on recipients beyond those the service itself
+     imposes.
+
+This permission covers only the restrictions described above; every other term
+of the GPL continues to apply. If you modify this program, you may extend this
+permission to your version, but you are not obliged to. If you do not wish to,
+delete this permission statement from your version.
