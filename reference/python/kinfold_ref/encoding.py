@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Wire encoding (PROTOCOL.md section 2).
+"""Wire encoding (PROTOCOL.md section 2) and padding (section 7.4).
 
 All integers are unsigned big-endian. vec16/vec32 are byte strings prefixed
 with their length in bytes. Parsers reject truncated input and trailing bytes.
@@ -115,3 +115,33 @@ class Reader:
     def end(self) -> None:
         if self.pos != len(self.data):
             raise DecodeError("trailing bytes")
+
+
+# --- padding (PROTOCOL.md section 7.4) ---------------------------------------------------
+
+BUCKETS = (256, 512, 1024, 2048, 4096, 8192, 16384, 65536)
+MAX_PAYLOAD = 65535
+
+
+def pad_to(p: bytes, n: int) -> bytes:
+    """PadTo(p, n) = p || 0x80 || zero bytes, to exactly n bytes."""
+    if len(p) > n - 1:
+        raise ValueError("too long to pad")
+    return bytes(p) + b"\x80" + bytes(n - len(p) - 1)
+
+
+def pad(p: bytes) -> bytes:
+    """Pad(p) = PadTo(p, the smallest bucket >= len(p) + 1)."""
+    if len(p) > MAX_PAYLOAD:
+        raise ValueError("payload too large")
+    return pad_to(p, next(b for b in BUCKETS if b >= len(p) + 1))
+
+
+def unpad(x: bytes, sizes=BUCKETS):
+    """Returns the unpadded bytes, or None. len(x) must be one of `sizes`."""
+    if len(x) not in sizes:
+        return None
+    y = bytes(x).rstrip(b"\x00")
+    if not y or y[-1] != 0x80:
+        return None
+    return y[:-1]

@@ -43,15 +43,63 @@ def sign(seed: bytes, purpose: str, data: bytes) -> bytes:
     return Ed25519PrivateKey.from_private_bytes(seed).sign(vec16(label(purpose)) + data)
 
 
-def verify(pub: bytes, purpose: str, data: bytes, sig: bytes) -> bool:
+ED25519_L = 2**252 + 27742317777372353535851937790883648493      # order of the base point
+P25519 = 2**255 - 19
+ED25519_SMALL_ORDER_Y = frozenset(bytes.fromhex(h) for h in (       # y of the 8 small-order points
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0100000000000000000000000000000000000000000000000000000000000000",
+    "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+    "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+    "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"))
+
+
+def ed25519_point_rejected(enc: bytes) -> bool:
+    """Checks 2 and 3 of section 3.3 on a public key or on R: true when the
+    encoding is non-canonical (y >= p) or names a small-order point."""
+    if len(enc) != 32:
+        return True
+    y = bytes(enc[:31]) + bytes([enc[31] & 0x7F])       # clear the sign bit
+    return int.from_bytes(y, "little") >= P25519 or y in ED25519_SMALL_ORDER_Y
+
+
+def ed25519_key_invalid(pub: bytes) -> bool:
+    """An "invalid key" in the sense of section 3.3."""
+    return ed25519_point_rejected(pub)
+
+
+def verify_raw(pub: bytes, msg: bytes, sig: bytes) -> bool:
+    """Strict Ed25519 verification (section 3.3): the byte checks first, then the
+    library's single-signature, cofactorless check."""
+    if len(sig) != 64 or int.from_bytes(sig[32:], "little") >= ED25519_L:
+        return False
+    if ed25519_point_rejected(pub) or ed25519_point_rejected(sig[:32]):
+        return False
     try:
-        Ed25519PublicKey.from_public_bytes(pub).verify(sig, vec16(label(purpose)) + data)
+        Ed25519PublicKey.from_public_bytes(pub).verify(sig, msg)
         return True
     except (InvalidSignature, ValueError):
         return False
 
 
+def verify(pub: bytes, purpose: str, data: bytes, sig: bytes) -> bool:
+    return verify_raw(pub, vec16(label(purpose)) + data, sig)
+
+
 # --- X25519, HKDF, AES-GCM -----------------------------------------------------
+
+X25519_LOW_ORDER = frozenset(bytes.fromhex(h) for h in (
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0100000000000000000000000000000000000000000000000000000000000000",
+    "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+    "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157",
+    "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"))
+
+
+def x25519_key_invalid(pub: bytes) -> bool:
+    """An "invalid key" in the sense of section 3.5: top bit set, not below p, or low order."""
+    return (len(pub) != 32 or pub[31] & 0x80 != 0 or int.from_bytes(pub, "little") >= P25519
+            or bytes(pub) in X25519_LOW_ORDER)
+
 
 def x25519_public(sk: bytes) -> bytes:
     return X25519PrivateKey.from_private_bytes(sk).public_key().public_bytes(**_RAW)
