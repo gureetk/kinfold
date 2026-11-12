@@ -5,4 +5,4 @@ Written for clarity and for generating test vectors, not for production use:
 it is not constant-time beyond what the underlying library provides, and it
 keeps secrets in ordinary Python objects.
 """
-from . import crypto, encoding, envelope, identity, log, rendezvous  # noqa: F401
+from . import crypto, encoding, envelope, identity, log, push, rendezvous  # noqa: F401
