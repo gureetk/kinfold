@@ -212,6 +212,28 @@ func TestFileMode(t *testing.T) {
 	}
 }
 
+// A database at an older schema version is upgraded, keeping what it holds.
+func TestUpgrade(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kinfold.db")
+	mustDo(t, open(t, path).Close())
+	db, err := sql.Open("sqlite3", "file:"+path)
+	mustDo(t, err)
+	// Back to version 1, as the first release left it, with a token in it.
+	for _, q := range []string{`DROP TABLE watches`, `DROP TABLE heard`, `PRAGMA user_version = 1`,
+		`INSERT INTO tokens VALUES (x'01', 1, 9, 0, NULL)`} {
+		_, err = db.Exec(q)
+		mustDo(t, err)
+	}
+	db.Close()
+	s := open(t, path)
+	mustDo(t, s.Update(func(tx store.Tx) error {
+		if _, err := tx.Token([]byte{1}); err != nil {
+			t.Error("the token is gone")
+		}
+		return tx.PutWatch(store.Watch{Circle: []byte("c"), Device: []byte("d"), Watcher: []byte("w"), Grant: []byte("g")})
+	}))
+}
+
 // A database from a newer server is refused, not changed.
 func TestNewerSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "kinfold.db")

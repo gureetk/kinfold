@@ -18,10 +18,11 @@ go build -trimpath -o kinfold ./cmd/kinfold
 
 ## HTTP API
 
-`internal/api` implements `spec/API.md` §1 to §7 and §9: discovery and health, accounts, devices and login, circles and the member log (with the repair path), envelopes, the inbox and the WebSocket stream, and invites. `internal/admin` and `cmd/kinfold` implement the part of §16 a first device needs (setup codes and registration tokens) plus settings, operators and repair mode.
+`internal/api` implements `spec/API.md` §1 to §9: discovery and health, accounts, devices and login, circles and the member log (with the repair path), envelopes, the inbox and the WebSocket stream, silence watches, and invites. Waking devices and alerting those without a stream wait for push (§12). `internal/admin` and `cmd/kinfold` implement the part of §16 a first device needs (setup codes and registration tokens) plus settings, operators and repair mode.
 
 - Storage sits behind `internal/store`, a transactional interface: every check and the write it guards run in one transaction (see Storage).
 - The stream holds no records in memory. A stored envelope wakes its recipients' streams, and each reads its records from the store after its own cursor, so it can't skip one, send one twice or grow a queue behind a slow connection. Log frames keep only the latest per circle, and events are capped. Shutting down closes every stream with 4000 first, since `http.Server.Shutdown` leaves upgraded connections alone.
+- Silence watches are checked once a minute (`CheckSilences`), against the server's clock, and only a circle envelope from the watched device resets one.
 - The clock is injected (`internal/clock`); tests set it.
 - Nothing is logged about requests: no bodies, tokens, IDs, positions or addresses.
 
@@ -29,7 +30,7 @@ go build -trimpath -o kinfold ./cmd/kinfold
 
 `internal/store` has two implementations, and `internal/store/storetest` holds the tests both must pass: every record type, circles and their logs, inbox paging, replay records, invites, sweeps, and transactions that fail or panic halfway.
 
-- **`internal/store/sqlstore`** is what the server runs on. SQLite in WAL mode, so reads see a snapshot and never wait for a write. One connection writes, and `synchronous=FULL` puts every write on disk before the server acknowledges it. The schema is in `schema.sql`, with its version in `PRAGMA user_version`; a database from a newer server is refused, not changed.
+- **`internal/store/sqlstore`** is what the server runs on. SQLite in WAL mode, so reads see a snapshot and never wait for a write. One connection writes, and `synchronous=FULL` puts every write on disk before the server acknowledges it. The schema is in `schema/`, one script per version, and `PRAGMA user_version` records where a database is: an older one is upgraded a version at a time, each in a transaction, and one from a newer server is refused, not changed.
 - A circle's public state isn't stored. It is replayed from the circle's log, the signed record it comes from, and kept in memory once replayed. A log that no longer verifies is an error, never a state. Its own tests reopen the file, read snapshots while writes land, write from many goroutines at once, and tamper with a stored entry.
 - **`internal/store/memstore`** keeps everything in memory, with an undo log, for tests: `KINFOLD_STORE=memory` runs the API tests on it.
 
@@ -77,6 +78,7 @@ go test -run '^$' -fuzz '^FuzzApply$' -fuzztime 1m ./internal/memberlog
 - **Fuzzing.** Every parser has a native fuzz target: base64url, frames, padding, certificates, bundles, chains, the server's own structures, log entries (with `Apply` on three states), envelopes and watch grants.
 - **API.** `internal/api` replays the vectors' whole main log through HTTP, each entry from a session of its author's device at its own `created_at`, then posts the vectors' envelopes and checks every inbox. It also tests `bad_time` through the API with the clock injected, sessions and login, rate limits, body limits, API revisions, the unsynchronized clock, repair mode, a removed device's read access, invites with their limits, waiting reads and inviters who leave, and refused requests counting against the limits. `internal/admin` is tested on its own: setup codes, tokens, settings, repair mode and operators.
 - **End to end.** `internal/e2e` drives a server with two clients built on the Python reference: register from a setup code, create a circle, invite and join, then send an envelope each way and fetch and open it.
+- **Watches.** The vectors' grants, then grants signed in the tests: who may register, renew and end a watch, the silence counted from registration and from the last circle envelope (a direct one doesn't count), the wake-up wait and a single alert, signed for its recipient, `watch_ended` for each reason, and a revoked grant that can't come back.
 - **Stream.** Tests on a real listener, against the WebSocket client of the same library: records waiting and live, cursors shared with the inbox, log frames and the `removed` event, `join_request`, notices, and every way a stream ends (replaced, logged out, deregistered, rate limited, idle, session over, restarting), with the intervals shortened.
 - **Storage.** See Storage above. `internal/api` runs on SQLite, and once more on memory in CI. A test sweeps a closed circle away through the API's retention.
 - **Differential run.** `internal/difftest` feeds the same inputs to these packages and to the Python reference (`reference/python`) and compares outcomes, reason codes and the whole public state. Most inputs are entries, envelopes and grants built and signed with the vectors' keys, so that they reach the rules behind the signature checks; accepted entries become states for later inputs. `KINFOLD_DIFF_N` and `KINFOLD_DIFF_SEED` set its size and seed.

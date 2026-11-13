@@ -36,6 +36,13 @@ type Store struct {
 	nextSeq    uint64
 	seen       map[string]seenRecord // circle ‖ sender ‖ seq
 	invites    map[string]store.Invite
+	watches    map[string]store.Watch // circle ‖ device ‖ watcher
+	heard      map[string]heardAt     // circle ‖ device
+}
+
+type heardAt struct {
+	circle string
+	at     uint64
 }
 
 // New returns an empty store.
@@ -44,7 +51,7 @@ func New() *Store {
 		devices: map[string]store.Device{}, challenges: map[string]store.Challenge{},
 		sessions: map[string]store.Session{}, circles: map[string]*circleLog{},
 		removals: map[string]store.Removal{}, seen: map[string]seenRecord{}, invites: map[string]store.Invite{},
-		nextSeq: 1}
+		watches: map[string]store.Watch{}, heard: map[string]heardAt{}, nextSeq: 1}
 }
 
 // tx records how to undo each write, so that a failed Update leaves nothing behind.
@@ -352,6 +359,60 @@ func (t *tx) InvitesOf(circle []byte) ([]store.Invite, error) {
 	return out, nil
 }
 
+// ---- watches ----
+
+func (t *tx) PutWatch(v store.Watch) error {
+	set(t, t.s.watches, cat(v.Circle, v.Device, v.Watcher), v)
+	return nil
+}
+
+func (t *tx) Watch(circle, device, watcher []byte) (store.Watch, error) {
+	return get(t.s.watches, []byte(cat(circle, device, watcher)))
+}
+
+func (t *tx) DeleteWatch(circle, device, watcher []byte) error {
+	del(t, t.s.watches, cat(circle, device, watcher))
+	return nil
+}
+
+func (t *tx) watches(keep func(store.Watch) bool) []store.Watch {
+	var out []store.Watch
+	for _, v := range t.s.watches {
+		if keep(v) {
+			out = append(out, v)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		return cat(a.Circle, a.Device, a.Watcher) < cat(b.Circle, b.Device, b.Watcher)
+	})
+	return out
+}
+
+func (t *tx) WatchesIn(circle []byte) ([]store.Watch, error) {
+	return t.watches(func(v store.Watch) bool { return bytes.Equal(v.Circle, circle) }), nil
+}
+
+func (t *tx) Watches() ([]store.Watch, error) {
+	return t.watches(func(store.Watch) bool { return true }), nil
+}
+
+func (t *tx) Heard(circle, device []byte, at uint64) error {
+	set(t, t.s.heard, cat(circle, device), heardAt{string(circle), at})
+	for k, v := range t.s.watches {
+		if bytes.Equal(v.Circle, circle) && bytes.Equal(v.Device, device) {
+			v.Since, v.WokeAt, v.Alerted = at, 0, false
+			set(t, t.s.watches, k, v)
+		}
+	}
+	return nil
+}
+
+func (t *tx) LastHeard(circle, device []byte) (uint64, bool, error) {
+	h, ok := t.s.heard[cat(circle, device)]
+	return h.at, ok, nil
+}
+
 // ---- sweeping ----
 
 // sweep deletes the entries of m for which gone is true, and counts them.
@@ -377,6 +438,7 @@ func (t *tx) Sweep(now uint64, r store.Retention) (store.Swept, error) {
 	n.Invites = sweep(t, t.s.invites, func(v store.Invite) bool {
 		return now >= v.ExpiresAt && (v.Result == nil || now >= v.ResultAt+r.Results)
 	})
+	n.Watches = sweep(t, t.s.watches, func(v store.Watch) bool { return v.Revoked && now >= v.NotAfter })
 	// A closed circle goes with everything that names it.
 	gone := map[string]bool{}
 	n.Circles = sweep(t, t.s.circles, func(l *circleLog) bool {
@@ -390,6 +452,8 @@ func (t *tx) Sweep(now uint64, r store.Retention) (store.Swept, error) {
 		n.Removals += sweep(t, t.s.removals, func(v store.Removal) bool { return gone[string(v.Circle)] })
 		n.Invites += sweep(t, t.s.invites, func(v store.Invite) bool { return gone[string(v.Circle)] })
 		n.Seen += sweep(t, t.s.seen, func(v seenRecord) bool { return gone[v.circle] })
+		n.Watches += sweep(t, t.s.watches, func(v store.Watch) bool { return gone[string(v.Circle)] })
+		sweep(t, t.s.heard, func(v heardAt) bool { return gone[v.circle] })
 	}
 	// Envelopes are a slice in order of arrival.
 	old := t.s.envelopes

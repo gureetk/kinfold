@@ -1,6 +1,6 @@
 # Kinfold HTTP API, version 0
 
-**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §7 (all but the `push` message and `stream_post`), §9, and the part of §16 that a first device needs.
+**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §9 and the part of §16 that a first device needs. Until push (§12) is in, it wakes no device, and silence alerts reach only devices with a stream open; `stream_post` isn't offered.
 **License:** [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 Section numbers written "spec §…" point into PROTOCOL.md. Where the two documents disagree about bytes, the spec wins.
@@ -69,8 +69,10 @@ Errors are JSON: `{"error": "<code>", "message": "<text for developers>"}` plus 
 | 409 | `out_of_order` | A link slot written before the one it answers |
 | 409 | `still_member` | Deleting an account that is still in a circle |
 | 409 | `already_registered` | Registering an account or device that is already registered |
+| 409 | `stale_grant` | A watch grant no newer than the one registered, or than one the watched account deleted (§8) |
 | 410 | `gone` | An invite, link mailbox or share link that has ended |
 | 413 | `too_large` | A body over the endpoint's limit (§3) |
+| 422 | `bad_grant` | A watch grant that isn't valid (spec §14.1), or whose IDs aren't the path's |
 | 422 | a reason code from spec §16.5 | A protocol object was read and refused: `bad_signature`, `stale_head`, `bad_wraps` and so on. For log entries and envelopes the answer carries the circle's current `seq` and `head`, so the sender can see how far behind it is |
 | 426 | `update_required` | The client's API revision is too old. Carries `api_min` |
 | 429 | `rate_limited` | Too many requests. Carries a `Retry-After` header |
@@ -274,17 +276,17 @@ Reconnecting backs off from 1 second to 5 minutes, with jitter.
 | `GET /v1/circles/{id}/watches` | P | — | The watches this account holds, and the watches on this account's devices |
 | `DELETE /v1/circles/{id}/watches/{device_id}?watcher={account_id}` | P | — | 204 |
 
-**Registering.** `{device_id}` is the watched phone or tablet. The server checks the grant (spec §14.1): the signature under that device's signing key in the log, the circle and device IDs against the path, the watcher account against the session, `after_min` between 15 and 1,440, and `not_after` in the future and at most 35 days away. A newer grant replaces an older one. There is one watch per watcher account and watched device.
+**Registering.** `{device_id}` is the watched phone or tablet. The server checks the grant (spec §14.1): the signature under that device's signing key in the log, the circle and device IDs against the path, the watcher account against the session, `after_min` between 15 and 1,440, and `not_after` in the future and at most 35 days away. A grant that fails is 422 `bad_grant`; one that names another watcher than the session's account is 403. There is one watch per watcher account and watched device. A newer grant, one with a later `not_after`, replaces the one registered and the silence goes on counting; the same grant again succeeds; an older one is 409 `stale_grant`.
 
-**Listing** returns `[{"watched_device_id", "watcher_account_id", "after_min", "not_after"}]`. Nobody can be watched without being able to see it.
+**Listing** returns `[{"watched_device_id", "watcher_account_id", "after_min", "not_after"}]`, empty when there are none. Nobody can be watched without being able to see it.
 
-**Ending.** The watcher may delete its own watch (`watcher` left out). So may any phone or tablet of the watched account, naming the watcher. A watch also ends when its grant expires or the watched device leaves the circle. In every case the watcher gets a `watch_ended` event, which is how a guardian learns that a teen's phone has dropped one.
+**Ending.** The watcher may delete its own watch (`watcher` left out). So may any phone or tablet of the watched account, naming the watcher; anyone else gets 403, and a watch that doesn't exist 404. When the watched account deletes a watch, the server remembers it until the grant's `not_after`, and refuses grants no newer than the deleted one with 409 `stale_grant`, so that the watcher can't bring the watch back with a grant it already holds. A watch also ends when its grant expires or the watched device leaves the circle. In every case the watcher gets a `watch_ended` event, which is how a guardian learns that a teen's phone has dropped one. A watch whose watcher's account leaves the circle ends without one.
 
-**Firing.** A watch is reset each time the server stores a circle envelope from the watched device, and by nothing else. When `after_min` passes without one, the server:
+**Firing.** A watch is reset each time the server stores a circle envelope from the watched device, and by nothing else; a new watch counts from the last one the server stored, or from its registration. The check runs once a minute. When `after_min` passes without one, the server:
 
 1. wakes the watched device (§12: a location push where it has one, otherwise a background wake);
 2. waits two minutes;
-3. if still nothing has arrived, sends a `Push` of type `silence` to every phone and tablet of the watcher account, over the stream or by push.
+3. if still nothing has arrived, sends a `Push` of type `silence` to every phone and tablet of the watcher account, over the stream or by push. Its `last_seen_at` is when the server last stored a circle envelope from the device, or 0 if it doesn't know.
 
 It alerts once per silence and is armed again when the device is next heard.
 
@@ -457,6 +459,7 @@ What has run out is refused at once and deleted by a sweep every hour:
 - login challenges, sessions and registration tokens when they expire;
 - invites once nothing can use them: after `expires_at`, and a day after their result if one was written (§9);
 - a removed device's access to the log after 30 days (§6);
+- watches the watched account deleted, when their grant would have run out (§8);
 - closed circles 30 days after their last member left, with everything that names them;
 - link mailboxes within minutes, and share links within 24 hours.
 
@@ -506,4 +509,5 @@ The setup code is printed as text for now, with the server key in base64url.
 - **Relay abuse limits** and whether registering with the relay should need Apple's app attestation.
 - **Federation** between servers is out of scope for v0.
 - **The server key's fingerprint.** Spec §13.1 asks apps that let a person type an address to show the server key's fingerprint for comparison with the command line's, but defines no format. The command line prints the whole key in base64url until it does.
+- **Revoking a watch grant.** A `WatchGrant` carries no signed time of issue, so the server can't tell a grant the watcher held back from one issued after the watched account deleted the watch. §8 refuses the same or older grants; a newer one issued before the deletion still gets through until the protocol settles this.
 - **Restoring registrations.** Repair mode (§6) restores logs. Devices and accounts registered after the backup are lost with it; how they register again, without new tokens for everyone, is still to be settled.

@@ -146,6 +146,10 @@ func (s *Server) routes() {
 	h("GET /v1/inbox", s.inbox)
 	h("GET /v1/stream", s.openStream)
 
+	h("PUT /v1/circles/{id}/watches/{device_id}", s.putWatch)
+	h("GET /v1/circles/{id}/watches", s.listWatches)
+	h("DELETE /v1/circles/{id}/watches/{device_id}", s.deleteWatch)
+
 	h("POST /v1/invites", s.createInvite)
 	h("POST /v1/invites/{invite_id}/requests", s.postJoinRequest)
 	h("GET /v1/invites/{invite_id}/requests", s.joinRequests)

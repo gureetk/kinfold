@@ -12,7 +12,7 @@ package sqlstore
 import (
 	"context"
 	"database/sql"
-	_ "embed"
+	"embed"
 	"errors"
 	"fmt"
 	"net/url"
@@ -27,11 +27,14 @@ import (
 	"github.com/gureetk/kinfold/server/internal/wire"
 )
 
-//go:embed schema.sql
-var schema string
+// schema holds one script per schema version, N.sql taking a database from version N-1
+// to N. PRAGMA user_version records the version a database is at.
+//
+//go:embed schema/*.sql
+var schema embed.FS
 
-// schemaVersion is the user_version of a database with this schema.
-const schemaVersion = 1
+// schemaVersion is the version this server's code reads and writes.
+const schemaVersion = 2
 
 // readers is how many connections may read at once.
 const readers = 4
@@ -87,28 +90,37 @@ func Open(path string) (*Store, error) {
 	return &Store{w: w, r: r, states: map[string]*memberlog.State{}}, nil
 }
 
+// migrate brings the database to schemaVersion, one version per transaction.
 func migrate(w *sql.DB) error {
 	var v int
 	if err := w.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
 		return err
 	}
-	switch {
-	case v == schemaVersion:
-		return nil
-	case v > schemaVersion:
+	if v > schemaVersion {
 		return fmt.Errorf("the database has schema version %d, newer than this server's %d", v, schemaVersion)
-	case v != 0:
-		return fmt.Errorf("the database has schema version %d, which this server can't upgrade", v)
 	}
+	for ; v < schemaVersion; v++ {
+		script, err := schema.ReadFile(fmt.Sprintf("schema/%d.sql", v+1))
+		if err != nil {
+			return err
+		}
+		if err := step(w, string(script), v+1); err != nil {
+			return fmt.Errorf("upgrading to schema version %d: %w", v+1, err)
+		}
+	}
+	return nil
+}
+
+func step(w *sql.DB, script string, to int) error {
 	tx, err := w.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(schema); err != nil {
+	if _, err := tx.Exec(script); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
+	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, to)); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -680,6 +692,74 @@ func (t *tx) InvitesOf(circle []byte) ([]store.Invite, error) {
 	return out, rows.Err()
 }
 
+// ---- watches ----
+
+const watchCols = `circle, device, watcher, grant_raw, after_min, not_after, since, woke_at, alerted, revoked`
+
+func scanWatch(row interface{ Scan(...any) error }) (store.Watch, error) {
+	var v store.Watch
+	var notAfter, since, woke int64
+	err := row.Scan(&v.Circle, &v.Device, &v.Watcher, &v.Grant, &v.AfterMin, &notAfter, &since, &woke, &v.Alerted, &v.Revoked)
+	v.NotAfter, v.Since, v.WokeAt = uint64(notAfter), uint64(since), uint64(woke)
+	return v, notFound(err)
+}
+
+func (t *tx) PutWatch(v store.Watch) error {
+	_, err := t.q.Exec(`INSERT OR REPLACE INTO watches (`+watchCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		v.Circle, v.Device, v.Watcher, v.Grant, v.AfterMin, i64(v.NotAfter), i64(v.Since), i64(v.WokeAt), v.Alerted, v.Revoked)
+	return err
+}
+
+func (t *tx) Watch(circle, device, watcher []byte) (store.Watch, error) {
+	return scanWatch(t.q.QueryRow(`SELECT `+watchCols+` FROM watches WHERE circle = ? AND device = ? AND watcher = ?`,
+		circle, device, watcher))
+}
+
+func (t *tx) DeleteWatch(circle, device, watcher []byte) error {
+	_, err := t.q.Exec(`DELETE FROM watches WHERE circle = ? AND device = ? AND watcher = ?`, circle, device, watcher)
+	return err
+}
+
+func (t *tx) watches(where string, args ...any) ([]store.Watch, error) {
+	rows, err := t.q.Query(`SELECT `+watchCols+` FROM watches `+where+` ORDER BY circle, device, watcher`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.Watch
+	for rows.Next() {
+		v, err := scanWatch(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (t *tx) WatchesIn(circle []byte) ([]store.Watch, error) {
+	return t.watches(`WHERE circle = ?`, circle)
+}
+func (t *tx) Watches() ([]store.Watch, error) { return t.watches(``) }
+
+func (t *tx) Heard(circle, device []byte, at uint64) error {
+	if _, err := t.q.Exec(`INSERT OR REPLACE INTO heard (circle, device, at) VALUES (?, ?, ?)`, circle, device, i64(at)); err != nil {
+		return err
+	}
+	_, err := t.q.Exec(`UPDATE watches SET since = ?, woke_at = 0, alerted = 0 WHERE circle = ? AND device = ?`,
+		i64(at), circle, device)
+	return err
+}
+
+func (t *tx) LastHeard(circle, device []byte) (uint64, bool, error) {
+	var at int64
+	err := t.q.QueryRow(`SELECT at FROM heard WHERE circle = ? AND device = ?`, circle, device).Scan(&at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	return uint64(at), err == nil, err
+}
+
 // ---- sweeping ----
 
 func (t *tx) Sweep(now uint64, r store.Retention) (store.Swept, error) {
@@ -703,6 +783,7 @@ func (t *tx) Sweep(now uint64, r store.Retention) (store.Swept, error) {
 	count(&n.Seen, `DELETE FROM seen WHERE keep_until <= ?`, at)
 	count(&n.Removals, `DELETE FROM removals WHERE at <= ? - ?`, at, i64(r.Removals))
 	count(&n.Invites, `DELETE FROM invites WHERE expires_at <= ? AND (result IS NULL OR result_at <= ? - ?)`, at, at, i64(r.Results))
+	count(&n.Watches, `DELETE FROM watches WHERE revoked AND not_after <= ?`, at)
 	if err != nil {
 		return n, err
 	}
@@ -730,6 +811,9 @@ func (t *tx) Sweep(now uint64, r store.Retention) (store.Swept, error) {
 		count(&n.Removals, `DELETE FROM removals WHERE circle = ?`, id)
 		count(&n.Invites, `DELETE FROM invites WHERE circle = ?`, id)
 		count(&n.Envelopes, `DELETE FROM envelopes WHERE circle = ?`, id)
+		count(&n.Watches, `DELETE FROM watches WHERE circle = ?`, id)
+		var heard int
+		count(&heard, `DELETE FROM heard WHERE circle = ?`, id)
 		delete(t.pending, string(id))
 	}
 	count(&n.Envelopes, `DELETE FROM envelopes WHERE expires_at <= ?`, at)

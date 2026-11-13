@@ -106,6 +106,11 @@ func (s *Server) postEnvelope(q *request) error {
 			return err
 		}
 		q.afterCommit(func() { s.tellRecords(recipients) })
+		if env.Kind == envelope.Circle { // a circle envelope, and nothing else, resets its sender's watches
+			if err := tx.Heard(id, env.Sender, q.now); err != nil {
+				return err
+			}
+		}
 		// Pushes for Kinfold-Wake come with push registration (API.md §12): until then the
 		// envelope waits for the recipient's next fetch.
 		return tx.PutSeen(id, env.Sender, env.Seq, store.SeenRecord{Digest: sha256.Sum256(raw), ReceivedAt: q.now,

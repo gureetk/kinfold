@@ -1,7 +1,7 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
 --
--- The server's tables, schema version 1. Times are milliseconds since 1970 (UTC); IDs,
--- keys, hashes and protocol objects are blobs. Nothing here can be read by the server
+-- Schema version 1: the server's first tables. Times are milliseconds since 1970 (UTC);
+-- IDs, keys, hashes and protocol objects are blobs. Nothing here can be read by the server
 -- beyond what PROTOCOL.md makes public.
 
 CREATE TABLE settings (
