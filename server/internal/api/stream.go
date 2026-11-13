@@ -324,7 +324,7 @@ func (s *Server) openStream(q *request) error {
 	}
 	st.conn = conn
 	conn.SetReadLimit(1 + 4 + 1 + envelope.MaxLen) // a post message
-	l := s.limiter.limits
+	l := s.limits()
 	if ok, _ := s.limiter.allow("stream/"+string(q.dev.ID), l.StreamsPerMinute, minute, q.now); !ok {
 		conn.Close(CloseRateLimited, closeReasons[CloseRateLimited])
 		return nil

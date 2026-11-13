@@ -17,6 +17,7 @@ import (
 
 	"github.com/gureetk/kinfold/server/internal/admin"
 	"github.com/gureetk/kinfold/server/internal/api"
+	"github.com/gureetk/kinfold/server/internal/store"
 	"github.com/gureetk/kinfold/server/internal/store/sqlstore"
 )
 
@@ -141,5 +142,48 @@ func TestServerStatus(t *testing.T) {
 	}
 	if h := l.admin("GET", "/status", ""); h["last_backup_at"] != float64(l.clk.Now()) {
 		t.Fatalf("health after a backup: %v", h)
+	}
+}
+
+// The operator sets rate limits (API.md §3): at once, for later starts, and back to their
+// defaults; names and values are checked.
+func TestOperatorLimits(t *testing.T) {
+	photon := newFakePhoton(t)
+	l := newLive(t, api.Limits{}, api.StreamTimes{}, func(c *api.Config) { c.Search = photon.URL })
+	limits := func(method, body string, want int) map[string]any {
+		t.Helper()
+		rec := l.adminCall(method, "/limits", body)
+		if rec.Code != want {
+			t.Fatalf("%s /limits %s: %d %s", method, body, rec.Code, rec.Body)
+		}
+		var out map[string]any
+		json.Unmarshal(rec.Body.Bytes(), &out)
+		return out
+	}
+	out := limits("GET", "", http.StatusOK)
+	inForce := out["in_force"].(map[string]any)
+	if inForce["search_per_minute"] != 30.0 || inForce["envelopes_per_hour"] != 600.0 || len(inForce) != 16 || len(out["set"].(map[string]any)) != 0 {
+		t.Fatalf("the defaults: %v", out)
+	}
+	out = limits("PATCH", `{"search_per_minute": 1}`, http.StatusOK)
+	if out["in_force"].(map[string]any)["search_per_minute"] != 1.0 || out["set"].(map[string]any)["search_per_minute"] != 1.0 {
+		t.Fatalf("set: %v", out)
+	}
+	phone := l.login(byLabel(l.devs, "maya/phone"))
+	expect(t, l.json("POST", "/v1/search", map[string]any{"q": "toronto"}, phone), http.StatusOK, "")
+	expect(t, l.json("POST", "/v1/search", map[string]any{"q": "toronto"}, phone), http.StatusTooManyRequests, "rate_limited")
+	l.st.View(func(tx store.Tx) error {
+		if s, _ := tx.Settings(); s.Limits != `{"search_per_minute":1}` {
+			t.Errorf("kept for later starts: %q", s.Limits)
+		}
+		return nil
+	})
+	out = limits("PATCH", `{"search_per_minute": 0}`, http.StatusOK)
+	if out["in_force"].(map[string]any)["search_per_minute"] != 30.0 || len(out["set"].(map[string]any)) != 0 {
+		t.Fatalf("back to the default: %v", out)
+	}
+	expect(t, l.json("POST", "/v1/search", map[string]any{"q": "toronto"}, phone), http.StatusOK, "")
+	for _, bad := range []string{`{"searches": 5}`, `{"search_per_minute": -1}`, `{"search_per_minute": 1000001}`, `[1]`} {
+		limits("PATCH", bad, http.StatusBadRequest)
 	}
 }

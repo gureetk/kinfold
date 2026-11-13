@@ -30,6 +30,11 @@ type Settings struct {
 	WebDevices   bool   // web and Home Assistant devices may be registered (§5)
 	RepairUntil  uint64 // repair mode lasts until this time (ms); 0 when off (§6)
 	LastBackupAt uint64 // when the last backup was written (ms); 0 if never (§16)
+	// WebTileRanges lets web devices read map regions in parts (§13).
+	WebTileRanges bool
+	// Limits are the rate limits the operator has set, as JSON; the rest keep their
+	// defaults (§3). Empty means none.
+	Limits string
 }
 
 // Token is a registration token. Only its hash is kept.

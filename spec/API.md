@@ -1,6 +1,6 @@
 # Kinfold HTTP API, version 0
 
-**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §13 and the part of §16 that a first device needs, with these gaps: it takes no `apns` registrations; the operator can't yet allow closed ranges for web devices (§13); the share viewer shows a position as text, not yet on the coarse map.
+**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §13 and the part of §16 that a first device needs, with these gaps: it takes no `apns` registrations; it doesn't yet hold stored envelopes to 512 MB per circle (§3); the share viewer shows a position as text, not yet on the coarse map.
 **License:** [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 Section numbers written "spec §…" point into PROTOCOL.md. Where the two documents disagree about bytes, the spec wins.
@@ -102,22 +102,22 @@ Sizes that every implementation must agree on are in spec §16.6. The API adds t
 | Log page | 1,024 entries or 4 MB, whichever comes first |
 | Inbox page | 256 records or 4 MB |
 
-Default rate limits. The operator can change them; clients MUST handle 429 at any of them. A limit per address counts the address of the connection, which the server keeps in memory for the length of the window and never writes down. A refused request counts like an accepted one. So does an envelope posted again, which the server checks again (§1); a log entry posted again doesn't.
+Default rate limits. The operator can change them (`kinfold limits`, §16); clients MUST handle 429 at any of them. A limit per address counts the address of the connection, which the server keeps in memory for the length of the window and never writes down. A refused request counts like an accepted one. So does an envelope posted again, which the server checks again (§1); a log entry posted again doesn't.
 
-| What | Default |
-| --- | --- |
-| Login challenges | 10 a minute per device ID, 60 a minute per address |
-| Log appends | 30 an hour per device, 500 a day per circle |
-| Envelopes | 20 a minute and 600 an hour per device |
-| Stream connections | 10 a minute per device; the next is closed with 4429 |
-| `Kinfold-Wake: notify` | 60 an hour per device |
-| `Kinfold-Wake: locate` | 6 an hour per sender and recipient |
-| Pending invites | 16 per circle; 3 waiting requests per invite |
-| Link mailboxes without a session | 6 an hour per address, 60 an hour for the whole server |
-| Link mailboxes with a session | 20 an hour per device |
-| Share links | 5 open per device; one update every 5 seconds |
-| Search | 30 a minute per device |
-| Stored envelopes | 512 MB per circle; the oldest are dropped first |
+| What | Default | Setting (§16) |
+| --- | --- | --- |
+| Login challenges | 10 a minute per device ID, 60 a minute per address | `challenges_per_device`, `challenges_per_address` |
+| Log appends | 30 an hour per device, 500 a day per circle | `appends_per_device`, `appends_per_circle` |
+| Envelopes | 20 a minute and 600 an hour per device | `envelopes_per_minute`, `envelopes_per_hour` |
+| Stream connections | 10 a minute per device; the next is closed with 4429 | `streams_per_minute` |
+| `Kinfold-Wake: notify` | 60 an hour per device | `wake_notify` |
+| `Kinfold-Wake: locate` | 6 an hour per sender and recipient | `wake_locate` |
+| Pending invites | 16 per circle; 3 waiting requests per invite | `pending_invites`, `waiting_requests` |
+| Link mailboxes without a session | 6 an hour per address, 60 an hour for the whole server | `links_per_address`, `links_per_server` |
+| Link mailboxes with a session | 20 an hour per device | `links_per_device` |
+| Share links | 5 open per device; one update every 5 seconds | `shares_per_device`; the 5 seconds are fixed |
+| Search | 30 a minute per device | `search_per_minute` |
+| Stored envelopes | 512 MB per circle; the oldest are dropped first | Fixed |
 
 ---
 
@@ -142,7 +142,7 @@ Default rate limits. The operator can change them; clients MUST handle 429 at an
 ```
 
 - `server_info` is the only signed part. A client checks it against the server key it trusts before believing anything else (spec §13.1).
-- `features` lists what the operator has switched on. `tiles` means the server offers at least one map region and `search` that the search add-on is installed (§13); `web_devices` means direction-2 linking is available (§10); `member_tokens` means admins can mint registration tokens with invites (§9); `stream_post` means devices may upload envelopes over the stream (§7); `apns` may appear on a server that holds its own Apple key (§12).
+- `features` lists what the operator has switched on. `tiles` means the server offers at least one map region and `search` that the search add-on is installed (§13); `web_devices` means direction-2 linking is available (§10); `member_tokens` means admins can mint registration tokens with invites (§9); `stream_post` means devices may upload envelopes over the stream (§7); `web_tile_ranges` means web devices may read map regions in parts (§13); `apns` may appear on a server that holds its own Apple key (§12).
 - `relay` is the iOS relay this server sends through. An app whose built-in relay differs warns the person that pushes won't arrive.
 - `vapid_key` is present with `webpush`. The app hands it to its UnifiedPush distributor. It lasts as long as the server's data; an app that sees a different one subscribes again with it and sends the new registration (§12).
 - `move` is present while a move is announced (spec §13.3), at the old address and the new one, for at least 90 days.
@@ -433,7 +433,7 @@ The relay and Apple see the delivery type. Neither sees what kind of alert it is
 
 - **Regions.** A region's `id` is 1 to 32 lower-case letters, digits and hyphens. `bbox` is west, south, east and north in degrees and, with `minzoom` and `maxzoom`, comes from the file's PMTiles header. `size` is in bytes, and `sha256` is the file's SHA-256 in base64url. The region's file has that value in quotes as its `ETag`. When the operator replaces a region, its URL stays and its `sha256` changes.
 - **Download whole regions; never browse them.** A request for part of a map file shows the server what is on someone's screen, and with it where family members are. Apps download a region once, check its hash, and draw from the file on the phone. They MUST NOT read a region over the network tile by tile. To hold apps to that, the server answers only whole-file requests and open-ended ranges (`Range: bytes=N-`, used to resume a download) on region files; any other `Range` is 400 `bad_request`, and an offset at or past the end is 416. `If-Range` and `ETag` are supported: an app resumes with `If-Range` set to the `ETag` it started with, and gets the whole new file if the region was replaced meanwhile.
-- **The exception is the browser.** A web device can't hold a region, so the operator MAY allow closed ranges on region files for web devices. The app's settings and the web map both say what that shows the server.
+- **The exception is the browser.** A web device can't hold a region, so the operator MAY allow closed ranges on region files for web devices (`web_tile_ranges` in discovery). The app's settings and the web map both say what that shows the server.
 - **The coarse archive** covers the same area to zoom 13 at most and needs no session. It answers any range. The share viewer uses it, and so does the web map unless the operator allows more.
 - **Search** takes `{"q": "…", "lang": "en", "limit": 5}` and optionally `"near": [lat, lon]`, and returns `{"results": [{"name", "address", "lat", "lon"}]}`. The server passes the text to the search add-on and logs nothing. Apps SHOULD send the centre of the downloaded region as `near`, never the phone's position. The server does see the text of every search, which is why search is an add-on a family can leave out.
 - **Search fields.**
@@ -514,7 +514,8 @@ The web console adds its own protections, since a console on `localhost` is a kn
 | --- | --- | --- |
 | `POST /setup` | `kinfold setup [--expires 24h]` | A registration token and the setup code carrying it, with the server's URL and key |
 | `POST /tokens`, `GET /tokens`, `DELETE /tokens/{id}` | `kinfold token create\|list\|revoke` | Registration tokens; only their hashes are kept, and `id` is the first 8 bytes of the hash in hex |
-| `GET /settings`, `PATCH /settings` | `kinfold settings [--member-tokens on\|off] [--web-devices on\|off]` | `member_tokens` and `web_devices` |
+| `GET /settings`, `PATCH /settings` | `kinfold settings [--member-tokens on\|off] [--web-devices on\|off] [--web-tile-ranges on\|off]` | `member_tokens`, `web_devices` and `web_tile_ranges` |
+| `GET /limits`, `PATCH /limits` | `kinfold limits`, `kinfold limits set NAME N\|reset NAME` | The rate limits of §3 by name (`envelopes_per_minute`, `search_per_minute` and so on): those in force and those the operator set. `PATCH` takes `{"name": n}`, 1 to 1,000,000, or 0 for the default; a change holds at once and after a restart |
 | `POST /repair`, `DELETE /repair` | `kinfold repair start [--hours 72]\|end` | Repair mode (§6), at most 72 hours |
 | `PUT /operators/{account_id}`, `DELETE …` | `kinfold operator add\|remove ACCOUNT_ID` | Who may read `/v1/server/status` |
 | `GET /accounts` | `kinfold accounts` | Every account with its devices: IDs, device kinds, the day each was made and was last seen (never a time of day), how many circles the account is in, operators, and nicknames |

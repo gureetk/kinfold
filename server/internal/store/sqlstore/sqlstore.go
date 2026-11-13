@@ -34,7 +34,7 @@ import (
 var schema embed.FS
 
 // schemaVersion is the version this server's code reads and writes.
-const schemaVersion = 6
+const schemaVersion = 7
 
 // readers is how many connections may read at once.
 const readers = 4
@@ -246,15 +246,16 @@ func unframes(b []byte) ([][]byte, error) {
 func (t *tx) Settings() (store.Settings, error) {
 	var s store.Settings
 	var until, backup int64
-	err := t.q.QueryRow(`SELECT member_tokens, web_devices, repair_until, last_backup_at FROM settings WHERE id = 1`).
-		Scan(&s.MemberTokens, &s.WebDevices, &until, &backup)
+	err := t.q.QueryRow(`SELECT member_tokens, web_devices, repair_until, last_backup_at, web_tile_ranges, limits
+		FROM settings WHERE id = 1`).Scan(&s.MemberTokens, &s.WebDevices, &until, &backup, &s.WebTileRanges, &s.Limits)
 	s.RepairUntil, s.LastBackupAt = uint64(until), uint64(backup)
 	return s, err
 }
 
 func (t *tx) PutSettings(s store.Settings) error {
-	_, err := t.q.Exec(`UPDATE settings SET member_tokens = ?, web_devices = ?, repair_until = ?, last_backup_at = ? WHERE id = 1`,
-		s.MemberTokens, s.WebDevices, i64(s.RepairUntil), i64(s.LastBackupAt))
+	_, err := t.q.Exec(`UPDATE settings SET member_tokens = ?, web_devices = ?, repair_until = ?, last_backup_at = ?,
+		web_tile_ranges = ?, limits = ? WHERE id = 1`,
+		s.MemberTokens, s.WebDevices, i64(s.RepairUntil), i64(s.LastBackupAt), s.WebTileRanges, s.Limits)
 	return err
 }
 

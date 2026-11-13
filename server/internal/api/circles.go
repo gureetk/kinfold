@@ -46,7 +46,7 @@ func refusedEntry(err error, st *memberlog.State) error {
 }
 
 func (s *Server) countAppend(q *request, circle []byte) error {
-	l := s.limiter.limits
+	l := s.limits()
 	if ok, wait := s.limiter.allow("append/device/"+string(q.dev.ID), l.AppendsPerDevice, hour, q.now); !ok {
 		return rateLimited(wait)
 	}

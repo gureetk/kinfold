@@ -466,22 +466,22 @@ func (s *Server) random(n int) []byte {
 
 // Limits are the operator's rate limits.
 type Limits struct {
-	ChallengesPerDevice  int // a minute
-	ChallengesPerAddress int // a minute
-	AppendsPerDevice     int // an hour
-	AppendsPerCircle     int // a day
-	EnvelopesPerMinute   int // per device
-	EnvelopesPerHour     int // per device
-	StreamsPerMinute     int // connections, per device
-	WakeNotify           int // uploads with Kinfold-Wake: notify, an hour per device
-	WakeLocate           int // uploads with Kinfold-Wake: locate, an hour per sender and recipient
-	LinksPerDevice       int // link mailboxes an hour, per device (direction 1)
-	LinksPerAddress      int // link mailboxes an hour without a session, per address (direction 2)
-	LinksPerServer       int // link mailboxes an hour without a session, for the whole server
-	SharesPerDevice      int // share links open at once, per device
-	SearchPerMinute      int // searches, per device
-	PendingInvites       int // per circle
-	WaitingRequests      int // per invite
+	ChallengesPerDevice  int `json:"challenges_per_device,omitempty"`  // a minute
+	ChallengesPerAddress int `json:"challenges_per_address,omitempty"` // a minute
+	AppendsPerDevice     int `json:"appends_per_device,omitempty"`     // an hour
+	AppendsPerCircle     int `json:"appends_per_circle,omitempty"`     // a day
+	EnvelopesPerMinute   int `json:"envelopes_per_minute,omitempty"`   // per device
+	EnvelopesPerHour     int `json:"envelopes_per_hour,omitempty"`     // per device
+	StreamsPerMinute     int `json:"streams_per_minute,omitempty"`     // connections, per device
+	WakeNotify           int `json:"wake_notify,omitempty"`            // uploads with Kinfold-Wake: notify, an hour per device
+	WakeLocate           int `json:"wake_locate,omitempty"`            // uploads with Kinfold-Wake: locate, an hour per sender and recipient
+	LinksPerDevice       int `json:"links_per_device,omitempty"`       // link mailboxes an hour, per device (direction 1)
+	LinksPerAddress      int `json:"links_per_address,omitempty"`      // link mailboxes an hour without a session, per address (direction 2)
+	LinksPerServer       int `json:"links_per_server,omitempty"`       // link mailboxes an hour without a session, for the whole server
+	SharesPerDevice      int `json:"shares_per_device,omitempty"`      // share links open at once, per device
+	SearchPerMinute      int `json:"search_per_minute,omitempty"`      // searches, per device
+	PendingInvites       int `json:"pending_invites,omitempty"`        // per circle
+	WaitingRequests      int `json:"waiting_requests,omitempty"`       // per invite
 }
 
 func (l Limits) withDefaults() Limits {
@@ -528,6 +528,28 @@ const minSweep = 4096
 
 func newLimiter(l Limits) *limiter {
 	return &limiter{limits: l, count: map[string]window{}, sweep: minSweep}
+}
+
+// limits are the rate limits in force.
+func (s *Server) limits() Limits {
+	s.limiter.mu.Lock()
+	defer s.limiter.mu.Unlock()
+	return s.limiter.limits
+}
+
+// Limits are the rate limits in force (API.md §3).
+func (s *Server) Limits() Limits { return s.limits() }
+
+// DefaultLimits are the rate limits of API.md §3.
+func DefaultLimits() Limits { return Limits{}.withDefaults() }
+
+// SetLimits puts new rate limits in force at once; zero values take the defaults. Counts
+// already made in the current windows stand.
+func (s *Server) SetLimits(l Limits) {
+	l = l.withDefaults()
+	s.limiter.mu.Lock()
+	s.limiter.limits = l
+	s.limiter.mu.Unlock()
 }
 
 // allow counts one call for key in a window of the given length, and returns the seconds

@@ -69,7 +69,7 @@ func (s *Server) search(q *request) error {
 	if err := s.cfg.Store.View(func(tx store.Tx) error { return s.session(q, tx, phoneOrWeb) }); err != nil {
 		return err
 	}
-	if ok, wait := s.limiter.allow("search/"+string(q.dev.ID), s.limiter.limits.SearchPerMinute, minute, q.now); !ok {
+	if ok, wait := s.limiter.allow("search/"+string(q.dev.ID), s.limits().SearchPerMinute, minute, q.now); !ok {
 		return rateLimited(wait)
 	}
 	switch {

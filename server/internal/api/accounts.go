@@ -46,6 +46,9 @@ func (s *Server) discovery(q *request) error {
 	if st.WebDevices {
 		features = append(features, "web_devices")
 	}
+	if st.WebTileRanges {
+		features = append(features, "web_tile_ranges")
+	}
 	if st.MemberTokens {
 		features = append(features, "member_tokens")
 	}
@@ -472,7 +475,7 @@ func (s *Server) challenge(q *request) error {
 	if len(in.DeviceID) != 16 {
 		return badRequest("device_id must be 16 bytes")
 	}
-	l := s.limiter.limits
+	l := s.limits()
 	if ok, wait := s.limiter.allow("challenge/device/"+string(in.DeviceID), l.ChallengesPerDevice, minute, q.now); !ok {
 		return rateLimited(wait)
 	}

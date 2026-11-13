@@ -72,6 +72,8 @@ func (a *Admin) Handler() http.Handler {
 	m.HandleFunc("DELETE /tokens/{id}", a.wrap(a.revokeToken))
 	m.HandleFunc("GET /settings", a.wrap(a.getSettings))
 	m.HandleFunc("PATCH /settings", a.wrap(a.patchSettings))
+	m.HandleFunc("GET /limits", a.wrap(a.getLimits))
+	m.HandleFunc("PATCH /limits", a.wrap(a.patchLimits))
 	m.HandleFunc("POST /repair", a.wrap(a.startRepair))
 	m.HandleFunc("DELETE /repair", a.wrap(a.endRepair))
 	m.HandleFunc("PUT /operators/{account_id}", a.wrap(a.setOperator(true)))
@@ -225,7 +227,8 @@ func (a *Admin) revokeToken(r *http.Request) (int, any, error) {
 }
 
 func settingsJSON(st store.Settings) map[string]any {
-	return map[string]any{"member_tokens": st.MemberTokens, "web_devices": st.WebDevices, "repair_until": st.RepairUntil}
+	return map[string]any{"member_tokens": st.MemberTokens, "web_devices": st.WebDevices, "web_tile_ranges": st.WebTileRanges,
+		"repair_until": st.RepairUntil}
 }
 
 func (a *Admin) getSettings(*http.Request) (int, any, error) {
@@ -236,8 +239,9 @@ func (a *Admin) getSettings(*http.Request) (int, any, error) {
 
 func (a *Admin) patchSettings(r *http.Request) (int, any, error) {
 	var in struct {
-		MemberTokens *bool `json:"member_tokens"`
-		WebDevices   *bool `json:"web_devices"`
+		MemberTokens  *bool `json:"member_tokens"`
+		WebDevices    *bool `json:"web_devices"`
+		WebTileRanges *bool `json:"web_tile_ranges"`
 	}
 	if err := decode(r, &in); err != nil {
 		return 0, nil, err
@@ -254,9 +258,96 @@ func (a *Admin) patchSettings(r *http.Request) (int, any, error) {
 		if in.WebDevices != nil {
 			st.WebDevices = *in.WebDevices
 		}
+		if in.WebTileRanges != nil {
+			st.WebTileRanges = *in.WebTileRanges
+		}
 		return tx.PutSettings(st)
 	})
 	return http.StatusOK, settingsJSON(st), err
+}
+
+// ---- rate limits (API.md §3) ----
+
+// MaxLimit is the largest value a rate limit may be set to.
+const MaxLimit = 1_000_000
+
+// limitsJSON are limits as a map by name, the names of API.md §3.
+func limitsJSON(l api.Limits) map[string]int {
+	b, _ := json.Marshal(l)
+	out := map[string]int{}
+	json.Unmarshal(b, &out)
+	return out
+}
+
+func (a *Admin) getLimits(*http.Request) (int, any, error) {
+	if a.API == nil {
+		return 0, nil, &httpError{http.StatusServiceUnavailable, "this admin socket has no server to ask"}
+	}
+	var st store.Settings
+	if err := a.Store.View(func(tx store.Tx) (err error) { st, err = tx.Settings(); return }); err != nil {
+		return 0, nil, err
+	}
+	set := map[string]int{}
+	if st.Limits != "" {
+		json.Unmarshal([]byte(st.Limits), &set)
+	}
+	return http.StatusOK, map[string]any{"in_force": limitsJSON(a.API.Limits()), "set": set}, nil
+}
+
+// patchLimits sets rate limits by name, at once and for later starts; 0 returns one to its
+// default.
+func (a *Admin) patchLimits(r *http.Request) (int, any, error) {
+	if a.API == nil {
+		return 0, nil, &httpError{http.StatusServiceUnavailable, "this admin socket has no server to change"}
+	}
+	var in map[string]int
+	if err := decode(r, &in); err != nil {
+		return 0, nil, err
+	}
+	known := limitsJSON(api.DefaultLimits())
+	for name, v := range in {
+		if _, ok := known[name]; !ok {
+			return 0, nil, &httpError{http.StatusBadRequest, "no limit is called " + name}
+		}
+		if v < 0 || v > MaxLimit {
+			return 0, nil, &httpError{http.StatusBadRequest, "a limit is 1 to 1,000,000, or 0 for its default"}
+		}
+	}
+	var limits api.Limits
+	err := a.Store.Update(func(tx store.Tx) error {
+		st, err := tx.Settings()
+		if err != nil {
+			return err
+		}
+		set := map[string]int{}
+		if st.Limits != "" {
+			json.Unmarshal([]byte(st.Limits), &set)
+		}
+		for name, v := range in {
+			if v == 0 {
+				delete(set, name)
+			} else {
+				set[name] = v
+			}
+		}
+		b, err := json.Marshal(set)
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(b, &limits); err != nil {
+			return err
+		}
+		st.Limits = ""
+		if len(set) > 0 {
+			st.Limits = string(b)
+		}
+		return tx.PutSettings(st)
+	})
+	if err != nil {
+		return 0, nil, err
+	}
+	a.API.SetLimits(limits)
+	return a.getLimits(r)
 }
 
 // startRepair switches repair mode on after a restore (API.md §6); it ends by itself

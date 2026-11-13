@@ -82,7 +82,7 @@ func (s *Server) createInvite(q *request) error {
 					pending++
 				}
 			}
-			if pending >= s.limiter.limits.PendingInvites {
+			if pending >= s.limits().PendingInvites {
 				return rateLimited(60)
 			}
 		}
@@ -140,7 +140,7 @@ func (s *Server) postJoinRequest(q *request) error {
 		if slices.ContainsFunc(inv.Requests, func(r []byte) bool { return bytes.Equal(r, raw) }) {
 			return nil // the same request again
 		}
-		if len(inv.Requests) >= s.limiter.limits.WaitingRequests {
+		if len(inv.Requests) >= s.limits().WaitingRequests {
 			return rateLimited(int((inv.ExpiresAt - q.now + 999) / 1000))
 		}
 		inv.Requests = append(slices.Clone(inv.Requests), raw)

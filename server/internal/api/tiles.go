@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gureetk/kinfold/server/internal/identity"
 	"github.com/gureetk/kinfold/server/internal/store"
 	"github.com/gureetk/kinfold/server/internal/tiles"
 	"github.com/gureetk/kinfold/server/internal/wire"
@@ -36,8 +37,9 @@ func (s *Server) listTiles(q *request) error {
 	return nil
 }
 
-// tileFile is GET /tiles/{file}: a region, for a device, whole or from an offset to its end;
-// or the coarse archive, for anyone, in any range.
+// tileFile is GET /tiles/{file}: a region, for a device, whole or from an offset to its end
+// (in any range for a web device, if the operator allows it); or the coarse archive, for
+// anyone, in any range.
 func (s *Server) tileFile(q *request) error {
 	name, ok := strings.CutSuffix(q.r.PathValue("file"), ".pmtiles")
 	if !ok || s.cfg.Tiles == nil {
@@ -47,11 +49,21 @@ func (s *Server) tileFile(q *request) error {
 	if name == "coarse" {
 		r, ok = s.cfg.Tiles.Coarse()
 	} else {
-		if err := s.cfg.Store.View(func(tx store.Tx) error { return s.session(q, tx, anyDevice) }); err != nil {
+		var st store.Settings
+		err := s.cfg.Store.View(func(tx store.Tx) error {
+			if err := s.session(q, tx, anyDevice); err != nil {
+				return err
+			}
+			var err error
+			st, err = tx.Settings()
+			return err
+		})
+		if err != nil {
 			return err
 		}
 		r, ok = s.cfg.Tiles.Region(name)
-		if ok && !wholeOrRest(q.r.Header.Get("Range")) {
+		browser := q.dev.Kind == identity.Web && st.WebTileRanges // a browser can't hold a region
+		if ok && !browser && !wholeOrRest(q.r.Header.Get("Range")) {
 			return badRequest("a region is read whole, or from an offset to its end (Range: bytes=N-)")
 		}
 	}

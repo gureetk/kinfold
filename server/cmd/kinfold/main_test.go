@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/gureetk/kinfold/server/internal/admin"
+	"github.com/gureetk/kinfold/server/internal/api"
 	"github.com/gureetk/kinfold/server/internal/clock"
 	"github.com/gureetk/kinfold/server/internal/store"
 	"github.com/gureetk/kinfold/server/internal/store/sqlstore"
@@ -115,5 +116,25 @@ func TestRestore(t *testing.T) {
 	defer l.Close()
 	if err := restore([]string{file, "--data", dst}); err == nil || !strings.Contains(err.Error(), "running") {
 		t.Fatalf("while running: %v", err)
+	}
+}
+
+// The limits the operator set are in force from the next start; the rest keep their defaults.
+func TestSavedLimits(t *testing.T) {
+	st, err := sqlstore.Open(filepath.Join(t.TempDir(), "kinfold.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if l, err := savedLimits(st); err != nil || l != (api.Limits{}) {
+		t.Fatalf("none set: %+v %v", l, err)
+	}
+	st.Update(func(tx store.Tx) error {
+		s, _ := tx.Settings()
+		s.Limits = `{"search_per_minute":5,"wake_notify":120}`
+		return tx.PutSettings(s)
+	})
+	if l, err := savedLimits(st); err != nil || l != (api.Limits{SearchPerMinute: 5, WakeNotify: 120}) {
+		t.Fatalf("two set: %+v %v", l, err)
 	}
 }
