@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: CC0-1.0
+name: Server
+
+on:
+  push:
+    paths: ["server/**", "spec/vectors/**", "reference/python/**", ".github/workflows/server.yml"]
+  pull_request:
+    paths: ["server/**", "spec/vectors/**", "reference/python/**", ".github/workflows/server.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache: false
+
+      - name: Build
+        run: CGO_ENABLED=0 go build -trimpath ./...
+
+      - name: Format and vet
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+
+      - name: Python reference for the differential run
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --require-hashes -r ../reference/python/requirements.txt
+
+      - name: Test, with the differential run against the Python reference
+        run: KINFOLD_PYTHON="$RUNNER_TEMP/venv/bin/python" go test -count=1 ./...
+
+      - name: Fuzz every target for 10 seconds
+        run: |
+          for pkg in $(go list ./...); do
+            for target in $(go test -list '^Fuzz' "$pkg" | grep '^Fuzz' || true); do
+              go test -run '^$' -fuzz "^${target}\$" -fuzztime 10s "$pkg"
+            done
+          done
+
+      # The tools are installed at pinned versions, checked against the Go checksum
+      # database; they are not dependencies of the server.
+      - name: staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
+          "$(go env GOPATH)/bin/staticcheck" ./...
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          "$(go env GOPATH)/bin/govulncheck" ./...
