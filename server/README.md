@@ -16,6 +16,10 @@ go build -trimpath -o kinfold ./cmd/kinfold
 
 `serve` keeps everything in the data directory, readable only by its user: its key (`server.key`), its Web Push key (`vapid.key`, not made with `--no-webpush`), the SQLite database (`kinfold.db`, with the `-wal` and `-shm` files SQLite keeps next to it), the map files (`tiles/`) and the admin socket (`admin.sock`). Give it `--tls-cert` and `--tls-key` to serve TLS 1.3 itself. `--relay` names the iOS relay (API.md §14); `--push-hosts` lists Web Push hosts allowed on private addresses, `--push-hosts-only` refuses every other, and `--no-webpush` takes no Web Push registrations at all. It refuses to answer anything but `/healthz` while the kernel reports the clock unsynchronized (`--no-clock-check` skips the check). At start and then every minute it deletes what has run out (API.md §15) and logs how many of each kind, nothing more, and runs the silence check (§8).
 
+### Backups
+
+`kinfold backup /safe/place/kinfold.tar` writes a tar archive: a snapshot of the database, taken while the server runs, and the server's keys. It leaves out the map files, which come from your own copies. The archive holds the server key, so keep it as safe. To restore, stop the server, then run `kinfold restore /safe/place/kinfold.tar --data /var/lib/kinfold`. It checks the archive and its database before it replaces anything, and the server then starts in repair mode, so phones can post again what the backup lacks (API.md §6). `kinfold status` shows when the last backup was made, with the server's health.
+
 ### Maps
 
 Phones download a whole region and draw it themselves (API.md §13). Cut one from the [Protomaps](https://docs.protomaps.com/basemaps/downloads) build with the `pmtiles` command line, which fetches only the parts it needs, then hand it to the server, which copies it in:
@@ -105,6 +109,13 @@ go test -run '^$' -fuzz '^FuzzApply$' -fuzztime 1m ./internal/memberlog
 - **Push.** Against a fake relay: `Kinfold-Wake: notify` and `locate`, each push's relay signature checked and opened with the device's key from the vectors (type, body, server signature), no push to a device on its stream, a dead token dropped and `push_dropped` on the next stream, the silence wake-up and alert, the wake limit refusing the upload, and what a registration may hold, address rules included.
 - **Web Push.** The encryption against RFC 8291's example, both ways. Against a fake push host on TLS: the headers, the VAPID token (claims and signature), the message opened as a subscription opens it and then with the device's key, `locate` looking like `notify`, a connection per push, and a 410 ending the registration. A host that resolves to a private address at send time gets no connection, and what the log says about a failure names no endpoint or address.
 - **Maps.** The header checks against hand-broken archives and `FuzzParseHeader`; the library copying, replacing, removing, refusing and reopening, with what it leaves on disk each time. Over a real listener: the list, whole and resumed downloads, `If-Range` and `If-None-Match`, every other kind of range refused for phones and browsers alike, HEAD, the coarse archive in any range without a session, and a download that finishes on the old file while its region is replaced. `internal/admin` adds and removes regions and the coarse archive.
+- **Backups.**
+  - A snapshot taken while the store stays open.
+  - The archive's contents, opened again.
+  - The data directory left clean.
+  - Refusals: an existing file, a relative path, and the memory store.
+  - `kinfold restore` in `cmd/kinfold`: the database and keys back with repair mode on, and nothing changed by four kinds of bad archive or while a server runs.
+  - The operators' status and the operator's health report, before and after a backup, with a relay that answers and one that's gone.
 - **Operator.** Over the vectors' family: the account list (days only), the circle and its counts, nicknames that devices never see. A device removed on the server has its stream closed at once and its session refused, and its account, still in the circle, stays. `internal/admin` removes an account in no circle with its device and session, and the store tests cover nicknames, the lists, and a version 1 database upgraded with an account and a device in it.
 - **Search.** Against a fake Photon:
   - what the add-on is sent, and how its GeoJSON becomes names, addresses and positions, with broken entries skipped;

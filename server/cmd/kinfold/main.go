@@ -17,6 +17,9 @@
 //	kinfold settings [--member-tokens on|off] [--web-devices on|off]
 //	kinfold operator add|remove ACCOUNT_ID
 //	kinfold repair start [--hours 72] | repair end
+//	kinfold status                                health: clock, disk, streams, pushes, relay, last backup
+//	kinfold backup FILE                           the database (a snapshot) and the keys, as a tar archive
+//	kinfold restore FILE                          with the server stopped: put a backup in place, in repair mode
 //	kinfold accounts | circles                    what the server knows of them: IDs, kinds, counts, days
 //	kinfold account nickname ID NAME | account remove ID
 //	kinfold device nickname ID NAME | device remove ID
@@ -29,6 +32,7 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"crypto/ecdsa"
@@ -48,6 +52,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -71,7 +76,10 @@ func main() {
 	switch cmd, args := os.Args[1], os.Args[2:]; cmd {
 	case "serve":
 		err = serve(args)
-	case "setup", "token", "settings", "operator", "repair", "region", "coarse", "accounts", "circles", "account", "device":
+	case "restore":
+		err = restore(args)
+	case "setup", "token", "settings", "operator", "repair", "region", "coarse", "accounts", "circles", "account", "device",
+		"backup", "status":
 		err = adminCommand(cmd, args)
 	default:
 		usage()
@@ -83,8 +91,8 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: kinfold serve|setup|token|settings|operator|repair|accounts|circles|account|device|region|coarse [flags];"+
-		" see the package documentation")
+	fmt.Fprintln(os.Stderr, "usage: kinfold serve|setup|token|settings|operator|repair|status|backup|restore|accounts|circles|"+
+		"account|device|region|coarse [flags]; see the package documentation")
 	os.Exit(2)
 }
 
@@ -144,7 +152,7 @@ func serve(args []string) error {
 	}
 	defer st.Close()
 	clk := clock.System{CheckSync: !*noClock}
-	handler := api.New(api.Config{URL: *url, Key: key, Clock: clk, Store: st, Tiles: maps, Search: *search,
+	handler := api.New(api.Config{URL: *url, Key: key, Clock: clk, Store: st, Tiles: maps, Search: *search, DataDir: *data,
 		Push: api.PushConfig{Relay: *relay, Hosts: hosts, HostsOnly: *pushHostsOnly, VAPID: vapid}})
 
 	srv := &http.Server{Addr: *listen, Handler: handler,
@@ -152,7 +160,7 @@ func serve(args []string) error {
 		IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 16 << 10,
 		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13}}
 	adminSrv := &http.Server{Handler: (&admin.Admin{Store: st, Clock: clk, Key: key, URL: *url, Notify: handler.Notice,
-		Tiles: maps, Remove: handler}).Handler(), ReadHeaderTimeout: 10 * time.Second}
+		Tiles: maps, API: handler, DataDir: *data}).Handler(), ReadHeaderTimeout: 10 * time.Second}
 
 	sock := filepath.Join(*data, "admin.sock")
 	os.Remove(sock)
@@ -256,6 +264,121 @@ func loadVAPID(path string) (*ecdsa.PrivateKey, error) {
 		return nil, fmt.Errorf("%s is not a VAPID key", path)
 	}
 	return k, nil
+}
+
+// restore puts a backup in place in a data directory while the server is stopped, and starts
+// repair mode there (API.md §6) for when it next runs, so phones can post again what the
+// backup lacks. The keys come back with the database: the server is the one that was backed up.
+func restore(args []string) error {
+	fs := flag.NewFlagSet("restore", flag.ExitOnError)
+	data := fs.String("data", defaultData, "data directory to restore into, with the server stopped")
+	hours := fs.Uint64("hours", admin.MaxRepairHours, "how long repair mode lasts, at most 72 hours")
+	var file string
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		file, args = args[0], args[1:]
+	}
+	fs.Parse(args)
+	if file == "" || fs.NArg() != 0 {
+		return errors.New("usage: kinfold restore FILE [--data DIR] [--hours 72]")
+	}
+	privateFiles()
+	if c, err := net.Dial("unix", filepath.Join(*data, "admin.sock")); err == nil {
+		c.Close()
+		return errors.New("the server is running: stop it first")
+	}
+	if err := os.MkdirAll(*data, 0o700); err != nil {
+		return err
+	}
+	f, err := os.Open(file)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	// Every file is written beside its place first, and moved there once the whole archive
+	// has been read.
+	staged := map[string]string{}
+	defer func() {
+		for _, tmp := range staged {
+			os.Remove(tmp)
+		}
+	}()
+	tr := tar.NewReader(f)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			return fmt.Errorf("%s isn't a backup: %w", file, err)
+		}
+		name := hdr.Name
+		if !slices.Contains(admin.BackupFiles, name) || staged[name] != "" || hdr.Typeflag != tar.TypeReg ||
+			(name != "kinfold.db" && hdr.Size != 32) {
+			return fmt.Errorf("%s isn't a backup: it holds %q", file, name)
+		}
+		tmp := filepath.Join(*data, name+".restoring")
+		out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		if err != nil {
+			return err
+		}
+		staged[name] = tmp
+		_, err = io.Copy(out, tr)
+		if err == nil {
+			err = out.Sync()
+		}
+		if cerr := out.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if staged["kinfold.db"] == "" || staged["server.key"] == "" {
+		return fmt.Errorf("%s isn't a backup: it lacks the database or the server key", file)
+	}
+	// The database is opened, brought to this server's schema and put in repair mode before
+	// anything in the directory is replaced, so a backup this server can't read changes nothing.
+	until := clock.System{}.Now() + min(max(*hours, 1), admin.MaxRepairHours)*3_600_000
+	if err := repairFrom(staged["kinfold.db"], until); err != nil {
+		return fmt.Errorf("the backup's database: %w", err)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := os.Remove(filepath.Join(*data, "kinfold.db"+suffix)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	for name, tmp := range staged {
+		if err := os.Rename(tmp, filepath.Join(*data, name)); err != nil {
+			return err
+		}
+		delete(staged, name)
+	}
+	fmt.Printf("Restored into %s. The server starts in repair mode until %v, so phones can post again what the backup lacks.\n",
+		*data, when(float64(until)))
+	return nil
+}
+
+// repairFrom opens a restored database, which brings it to this server's schema, and starts
+// repair mode in it until the given time.
+func repairFrom(path string, until uint64) error {
+	st, err := sqlstore.Open(path)
+	if err != nil {
+		return err
+	}
+	err = st.Update(func(tx store.Tx) error {
+		s, err := tx.Settings()
+		if err != nil {
+			return err
+		}
+		s.RepairUntil = until
+		return tx.PutSettings(s)
+	})
+	if cerr := st.Close(); err == nil {
+		err = cerr
+	}
+	if _, serr := os.Stat(path + "-wal"); err == nil && serr == nil {
+		err = errors.New("it didn't close cleanly")
+	}
+	return err
 }
 
 // ---- the operator's commands ----
@@ -372,6 +495,33 @@ func adminCommand(cmd string, args []string) error {
 	case cmd == "repair" && len(sub) == 1 && sub[0] == "end":
 		_, _, err := call("DELETE", "/repair", nil)
 		return err
+	case cmd == "backup" && len(sub) == 1:
+		path, err := filepath.Abs(sub[0])
+		if err != nil {
+			return err
+		}
+		out, _, err := call("POST", "/backup", map[string]any{"file": path})
+		if err != nil {
+			return err
+		}
+		size, _ := out["size"].(float64)
+		fmt.Printf("%v: %.1f MB, the database as of %v and the server's keys. Keep it as safe as the keys.\n", out["file"],
+			size/1e6, when(out["at"]))
+	case cmd == "status" && len(sub) == 0:
+		out, _, err := call("GET", "/status", nil)
+		if err != nil {
+			return err
+		}
+		up, _ := out["uptime_ms"].(float64)
+		fmt.Printf("up %v, clock synchronized: %v\n", time.Duration(up)*time.Millisecond, out["clock_synced"])
+		if free, ok := out["free_disk"].(float64); ok {
+			fmt.Printf("free disk: %.1f GB\n", free/1e9)
+		}
+		fmt.Printf("streams open: %v, pushes in flight: %v, link mailboxes: %v\n", out["streams"], out["pushes_in_flight"], out["link_mailboxes"])
+		if r, ok := out["relay_reachable"].(bool); ok {
+			fmt.Printf("relay reachable: %v\n", r)
+		}
+		fmt.Printf("repair mode until: %v\nlast backup: %v\n", when(out["repair_until"]), when(out["last_backup_at"]))
 	case cmd == "accounts" && len(sub) == 0:
 		_, list, err := call("GET", "/accounts", nil)
 		if err != nil {

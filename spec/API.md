@@ -521,7 +521,10 @@ The web console adds its own protections, since a console on `localhost` is a kn
 | `PATCH /accounts/{id}`, `PATCH /devices/{id}` | `kinfold account\|device nickname ID NAME` | `{"nickname"}`: a label of at most 64 bytes that only the operator sees; `""` clears it |
 | `DELETE /devices/{id}` | `kinfold device remove ID` | Cuts a device off: its sessions, push registration and stream end at once. Circles' logs still name it until a member removes it there |
 | `DELETE /accounts/{id}` | `kinfold account remove ID` | Deletes an account in no circle, with its devices; 409 while it is in one |
-| `GET /circles` | `kinfold circles` | Every circle, closed ones too: its ID, how many members and devices it has, the length of its log and the day it was made |
+| `GET /circles` | `kinfold circles` | Every circle, closed ones too: its ID, how many members and devices it has, the length of its log, its head and the day it was made. While phones repair after a restore, the head shows how far each circle has come |
+| `POST /backup` | `kinfold backup FILE` | `{"file"}`, which must not exist yet: a tar archive of a snapshot of the database, taken while the server runs, and the server's keys (`server.key`, and `vapid.key` if there is one). Map files are left out. The archive is as secret as the server key. Records `last_backup_at` |
+| — | `kinfold restore FILE` | With the server stopped: reads the archive, brings its database to this server's schema and starts repair mode (§6) in it, for 72 hours or `--hours`, and only then puts the database and keys in place. An archive that isn't a backup, or whose database this server can't read, changes nothing |
+| `GET /status` | `kinfold status` | Uptime, whether the clock is synchronized, free disk, open streams, pushes in flight, link mailboxes, whether the relay answers, repair mode and the last backup |
 | `GET /regions`, `PUT /regions/{id}`, `DELETE /regions/{id}` | `kinfold region list\|add ID FILE [--name NAME]\|remove ID` | Map regions (§13). `PUT` takes `{"file", "name"}`: the server copies the file in, checks that it is a PMTiles version 3 archive, and keeps it under its SHA-256, so a file never changes under a download |
 | `PUT /coarse`, `DELETE /coarse` | `kinfold coarse set FILE\|remove` | The coarse archive (§13), refused if it goes past zoom 13 |
 

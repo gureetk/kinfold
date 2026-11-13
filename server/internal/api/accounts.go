@@ -4,8 +4,10 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/gureetk/kinfold/server/internal/identity"
 	"github.com/gureetk/kinfold/server/internal/store"
@@ -90,14 +92,58 @@ func (s *Server) status(q *request) error {
 	if !acc.Operator {
 		return errForbidden
 	}
-	writeJSON(q.w, http.StatusOK, map[string]any{
-		"uptime_ms":      q.now - s.start,
-		"clock_synced":   s.cfg.Clock.Synced(),
-		"repair":         repairing(st, q.now),
-		"free_disk":      nil, // the in-memory store keeps nothing on disk
-		"last_backup_at": nil,
-	})
+	out := map[string]any{"uptime_ms": q.now - s.start, "clock_synced": s.cfg.Clock.Synced(), "repair": repairing(st, q.now),
+		"free_disk": nil, "last_backup_at": nil}
+	if free, ok := diskFree(s.cfg.DataDir); ok {
+		out["free_disk"] = free
+	}
+	if st.LastBackupAt != 0 {
+		out["last_backup_at"] = st.LastBackupAt
+	}
+	writeJSON(q.w, http.StatusOK, out)
 	return nil
+}
+
+// Health is what the operator's status shows of the running server (API.md §16).
+type Health struct {
+	UptimeMS       uint64  `json:"uptime_ms"`
+	ClockSynced    bool    `json:"clock_synced"`
+	FreeDisk       *uint64 `json:"free_disk"` // nil if unknown
+	Streams        int     `json:"streams"`
+	PushesInFlight int     `json:"pushes_in_flight"`
+	LinkMailboxes  int     `json:"link_mailboxes"`
+	Relay          *bool   `json:"relay_reachable"` // nil without a relay
+}
+
+// Health reports the server's state. With a relay, it asks whether the relay answers, which
+// takes up to 5 seconds.
+func (s *Server) Health(ctx context.Context) Health {
+	h := Health{UptimeMS: s.cfg.Clock.Now() - s.start, ClockSynced: s.cfg.Clock.Synced(), Streams: len(s.streams.all()),
+		PushesInFlight: len(s.sending), LinkMailboxes: s.links.count()}
+	if free, ok := diskFree(s.cfg.DataDir); ok {
+		h.FreeDisk = &free
+	}
+	if s.cfg.Push.Relay != "" {
+		ok := s.relayAnswers(ctx)
+		h.Relay = &ok
+	}
+	return h
+}
+
+// relayAnswers says whether the relay answers HTTPS at all: any status will do.
+func (s *Server) relayAnswers(ctx context.Context) bool {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, s.cfg.Push.Relay+"/", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := s.cfg.Push.Client.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return true
 }
 
 // ---- accounts and devices (API.md §5) ----

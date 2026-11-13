@@ -81,6 +81,9 @@ type Config struct {
 	// Search is the search add-on's base URL, a Photon instance (API.md §13); no search if
 	// empty.
 	Search string
+	// DataDir is where the server keeps its files, for the free space it reports; none if
+	// empty.
+	DataDir string
 }
 
 // Server is the HTTP API.

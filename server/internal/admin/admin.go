@@ -8,6 +8,7 @@
 package admin
 
 import (
+	"archive/tar"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -17,6 +18,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -50,15 +52,12 @@ type Admin struct {
 	Notify func(code string)
 	// Tiles are the map files on offer (API.md §13); nil on a server that keeps none.
 	Tiles *tiles.Library
-	// Remove removes devices and accounts through the API server, so that their sessions,
-	// push registrations and streams end at once. Without it, the admin can't remove them.
-	Remove Remover
-}
-
-// Remover is the API server's side of removing a device or an account (api.Server).
-type Remover interface {
-	RemoveDevice(id []byte) error
-	RemoveAccount(id []byte) error
+	// API is the running API server. Devices and accounts are removed through it, so that
+	// their sessions, push registrations and streams end at once, and the status asks it how
+	// it is. Without it, the admin can do neither.
+	API *api.Server
+	// DataDir is the server's data directory, where backups take the keys from.
+	DataDir string
 }
 
 // Handler returns the HTTP handler to serve on the admin socket.
@@ -83,6 +82,8 @@ func (a *Admin) Handler() http.Handler {
 	m.HandleFunc("PATCH /devices/{id}", a.wrap(a.nameDevice))
 	m.HandleFunc("DELETE /devices/{id}", a.wrap(a.removeDevice))
 	m.HandleFunc("GET /circles", a.wrap(a.listCircles))
+	m.HandleFunc("POST /backup", a.wrap(a.backup))
+	m.HandleFunc("GET /status", a.wrap(a.status))
 	m.HandleFunc("GET /regions", a.wrap(a.listRegions))
 	m.HandleFunc("PUT /regions/{id}", a.wrap(a.putRegion))
 	m.HandleFunc("DELETE /regions/{id}", a.wrap(a.deleteRegion))
@@ -432,10 +433,10 @@ func (a *Admin) removeDevice(r *http.Request) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	if a.Remove == nil {
+	if a.API == nil {
 		return 0, nil, &httpError{http.StatusServiceUnavailable, "this admin socket can't remove devices"}
 	}
-	if err := a.Remove.RemoveDevice(id); errors.Is(err, store.ErrNotFound) {
+	if err := a.API.RemoveDevice(id); errors.Is(err, store.ErrNotFound) {
 		return 0, nil, &httpError{http.StatusNotFound, "no such device"}
 	} else if err != nil {
 		return 0, nil, err
@@ -449,10 +450,10 @@ func (a *Admin) removeAccount(r *http.Request) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	if a.Remove == nil {
+	if a.API == nil {
 		return 0, nil, &httpError{http.StatusServiceUnavailable, "this admin socket can't remove accounts"}
 	}
-	switch err := a.Remove.RemoveAccount(id); {
+	switch err := a.API.RemoveAccount(id); {
 	case errors.Is(err, store.ErrNotFound):
 		return 0, nil, &httpError{http.StatusNotFound, "no such account"}
 	case errors.Is(err, api.ErrStillMember):
@@ -476,11 +477,123 @@ func (a *Admin) listCircles(*http.Request) (int, any, error) {
 				devices += len(m.Devices)
 			}
 			out = append(out, map[string]any{"circle_id": wire.EncodeB64u(c.ID), "members": len(c.State.Members), "devices": devices,
-				"entries": c.State.Seq + 1, "created_day": day(c.CreatedAt), "closed": len(c.State.Members) == 0})
+				"entries": c.State.Seq + 1, "head": wire.EncodeB64u(c.State.Head), "created_day": day(c.CreatedAt),
+				"closed": len(c.State.Members) == 0})
 		}
 		return nil
 	})
 	return http.StatusOK, out, err
+}
+
+// ---- backups and health ----
+
+// BackupFiles are what a backup holds, as the archive names them: a snapshot of the database
+// and the server's keys. The map files are left out; they come from the operator's own copies.
+var BackupFiles = []string{"kinfold.db", "server.key", "vapid.key"}
+
+// backup writes the server's data to a tar archive at file, which must not exist yet. The
+// database is a snapshot taken while the server runs. vapid.key is left out if the server
+// has none.
+func (a *Admin) backup(r *http.Request) (int, any, error) {
+	snap, ok := a.Store.(interface{ Backup(path string) error })
+	if !ok || a.DataDir == "" {
+		return 0, nil, &httpError{http.StatusServiceUnavailable, "this server's store can't be backed up"}
+	}
+	file, _, err := mapFile(r)
+	if err != nil {
+		return 0, nil, err
+	}
+	out, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, fs.ErrExist) {
+		return 0, nil, &httpError{http.StatusConflict, "the file exists"}
+	} else if err != nil {
+		return 0, nil, mapError(err)
+	}
+	now := a.Clock.Now()
+	size, err := func() (int64, error) {
+		defer out.Close()
+		db := filepath.Join(a.DataDir, "backup-"+hex.EncodeToString(a.random(8))+".db")
+		if err := snap.Backup(db); err != nil {
+			return 0, err
+		}
+		defer os.Remove(db)
+		tw := tar.NewWriter(out)
+		for _, name := range BackupFiles {
+			src := filepath.Join(a.DataDir, name)
+			if name == "kinfold.db" {
+				src = db
+			}
+			if err := addFile(tw, name, src, now); errors.Is(err, fs.ErrNotExist) && name == "vapid.key" {
+				continue
+			} else if err != nil {
+				return 0, err
+			}
+		}
+		if err := tw.Close(); err != nil {
+			return 0, err
+		}
+		if err := out.Sync(); err != nil {
+			return 0, err
+		}
+		return out.Seek(0, io.SeekCurrent)
+	}()
+	if err != nil {
+		os.Remove(file)
+		return 0, nil, err
+	}
+	err = a.Store.Update(func(tx store.Tx) error {
+		st, err := tx.Settings()
+		if err != nil {
+			return err
+		}
+		st.LastBackupAt = now
+		return tx.PutSettings(st)
+	})
+	return http.StatusOK, map[string]any{"file": file, "size": size, "at": now}, err
+}
+
+func addFile(tw *tar.Writer, name, src string, now uint64) error {
+	f, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	hdr := &tar.Header{Name: name, Mode: 0o600, Size: st.Size(), ModTime: time.UnixMilli(int64(now)), Format: tar.FormatPAX}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	_, err = io.CopyN(tw, f, st.Size())
+	return err
+}
+
+func (a *Admin) random(n int) []byte {
+	b := make([]byte, n)
+	io.ReadFull(a.Random, b)
+	return b
+}
+
+// status is the running server's health, repair mode and last backup.
+func (a *Admin) status(r *http.Request) (int, any, error) {
+	if a.API == nil {
+		return 0, nil, &httpError{http.StatusServiceUnavailable, "this admin socket has no server to ask"}
+	}
+	h := a.API.Health(r.Context())
+	var st store.Settings
+	if err := a.Store.View(func(tx store.Tx) (err error) { st, err = tx.Settings(); return }); err != nil {
+		return 0, nil, err
+	}
+	b, err := json.Marshal(h)
+	if err != nil {
+		return 0, nil, err
+	}
+	var out map[string]any
+	json.Unmarshal(b, &out)
+	out["repair_until"], out["last_backup_at"] = st.RepairUntil, st.LastBackupAt
+	return http.StatusOK, out, nil
 }
 
 // ---- maps (API.md §13) ----
