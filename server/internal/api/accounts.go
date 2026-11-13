@@ -35,6 +35,9 @@ func (s *Server) discovery(q *request) error {
 		"api":         map[string]int{"min": APIMin, "max": APIMax},
 		"repair":      repairing(st, q.now),
 	}
+	if s.cfg.Tiles != nil && len(s.cfg.Tiles.Regions()) > 0 {
+		features = append(features, "tiles")
+	}
 	if st.WebDevices {
 		features = append(features, "web_devices")
 	}

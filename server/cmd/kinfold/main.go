@@ -8,7 +8,8 @@
 //	              [--no-webpush]
 //
 // serve keeps everything in DIR: the server key (server.key), the Web Push key (vapid.key),
-// the database (kinfold.db, with its -wal and -shm files) and the admin socket (admin.sock).
+// the database (kinfold.db, with its -wal and -shm files), the map files (tiles/) and the
+// admin socket (admin.sock).
 //
 //	kinfold setup [--expires 24h]                 print a setup code for the first phone
 //	kinfold token create [--expires 168h]         a registration token
@@ -16,6 +17,9 @@
 //	kinfold settings [--member-tokens on|off] [--web-devices on|off]
 //	kinfold operator add|remove ACCOUNT_ID
 //	kinfold repair start [--hours 72] | repair end
+//	kinfold region add ID FILE [--name NAME]      offer a PMTiles region for download
+//	kinfold region list | region remove ID
+//	kinfold coarse set FILE | coarse remove       the share viewer's map, zoom 13 at most
 //
 // Every command but serve talks to the running server through the admin socket in the data
 // directory (DIR/admin.sock), which only the server's user can open.
@@ -37,6 +41,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -49,6 +54,7 @@ import (
 	"github.com/gureetk/kinfold/server/internal/clock"
 	"github.com/gureetk/kinfold/server/internal/store"
 	"github.com/gureetk/kinfold/server/internal/store/sqlstore"
+	"github.com/gureetk/kinfold/server/internal/tiles"
 	"github.com/gureetk/kinfold/server/internal/wire"
 )
 
@@ -62,7 +68,7 @@ func main() {
 	switch cmd, args := os.Args[1], os.Args[2:]; cmd {
 	case "serve":
 		err = serve(args)
-	case "setup", "token", "settings", "operator", "repair":
+	case "setup", "token", "settings", "operator", "repair", "region", "coarse":
 		err = adminCommand(cmd, args)
 	default:
 		usage()
@@ -74,7 +80,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: kinfold serve|setup|token|settings|operator|repair [flags]; see the package documentation")
+	fmt.Fprintln(os.Stderr, "usage: kinfold serve|setup|token|settings|operator|repair|region|coarse [flags]; see the package documentation")
 	os.Exit(2)
 }
 
@@ -119,21 +125,25 @@ func serve(args []string) error {
 			return err
 		}
 	}
+	maps, err := tiles.Open(filepath.Join(*data, "tiles"))
+	if err != nil {
+		return err
+	}
 	st, err := sqlstore.Open(filepath.Join(*data, "kinfold.db"))
 	if err != nil {
 		return err
 	}
 	defer st.Close()
 	clk := clock.System{CheckSync: !*noClock}
-	handler := api.New(api.Config{URL: *url, Key: key, Clock: clk, Store: st,
+	handler := api.New(api.Config{URL: *url, Key: key, Clock: clk, Store: st, Tiles: maps,
 		Push: api.PushConfig{Relay: *relay, Hosts: hosts, HostsOnly: *pushHostsOnly, VAPID: vapid}})
 
 	srv := &http.Server{Addr: *listen, Handler: handler,
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second,
 		IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 16 << 10,
 		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13}}
-	adminSrv := &http.Server{Handler: (&admin.Admin{Store: st, Clock: clk, Key: key, URL: *url, Notify: handler.Notice}).Handler(),
-		ReadHeaderTimeout: 10 * time.Second}
+	adminSrv := &http.Server{Handler: (&admin.Admin{Store: st, Clock: clk, Key: key, URL: *url, Notify: handler.Notice,
+		Tiles: maps}).Handler(), ReadHeaderTimeout: 10 * time.Second}
 
 	sock := filepath.Join(*data, "admin.sock")
 	os.Remove(sock)
@@ -248,6 +258,7 @@ func adminCommand(cmd string, args []string) error {
 	hours := fs.Uint64("hours", admin.MaxRepairHours, "how long repair mode lasts, at most 72 hours")
 	memberTokens := fs.String("member-tokens", "", "on or off: admins may mint registration tokens with invites")
 	webDevices := fs.String("web-devices", "", "on or off: web and Home Assistant devices may be registered")
+	name := fs.String("name", "", "the region's name, as apps show it; its ID if left out")
 	// Subcommands come before the flags: kinfold token create --expires 48h.
 	var sub []string
 	for len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -352,10 +363,53 @@ func adminCommand(cmd string, args []string) error {
 	case cmd == "repair" && len(sub) == 1 && sub[0] == "end":
 		_, _, err := call("DELETE", "/repair", nil)
 		return err
+	case cmd == "region" && len(sub) == 1 && sub[0] == "list":
+		out, _, err := call("GET", "/regions", nil)
+		if err != nil {
+			return err
+		}
+		regions, _ := out["regions"].([]any)
+		for _, r := range regions {
+			printMap(r)
+		}
+		if out["coarse"] != nil {
+			printMap(out["coarse"])
+		} else {
+			fmt.Println("no coarse archive: shared links show positions as text")
+		}
+	case cmd == "region" && len(sub) == 3 && sub[0] == "add", cmd == "coarse" && len(sub) == 2 && sub[0] == "set":
+		path, err := filepath.Abs(sub[len(sub)-1])
+		if err != nil {
+			return err
+		}
+		where := "/coarse"
+		if cmd == "region" {
+			where = "/regions/" + neturl.PathEscape(sub[1])
+		}
+		out, _, err := call("PUT", where, map[string]any{"file": path, "name": *name}) // copying a region takes a while
+		if err != nil {
+			return err
+		}
+		printMap(out)
+	case cmd == "region" && len(sub) == 2 && sub[0] == "remove":
+		_, _, err := call("DELETE", "/regions/"+neturl.PathEscape(sub[1]), nil)
+		return err
+	case cmd == "coarse" && len(sub) == 1 && sub[0] == "remove":
+		_, _, err := call("DELETE", "/coarse", nil)
+		return err
 	default:
 		usage()
 	}
 	return nil
+}
+
+// printMap prints a region or the coarse archive as the admin socket describes it.
+func printMap(v any) {
+	m, _ := v.(map[string]any)
+	size, _ := m["size"].(float64)
+	sum, _ := m["sha256"].(string)
+	fmt.Printf("%v  %q  %.1f MB  zoom %v to %v  sha256 %.16s…  updated %v\n", m["id"], m["name"], size/1e6, m["minzoom"],
+		m["maxzoom"], sum, when(m["updated_at"]))
 }
 
 func when(v any) string {

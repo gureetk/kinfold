@@ -6,9 +6,12 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,6 +20,8 @@ import (
 	"github.com/gureetk/kinfold/server/internal/identity"
 	"github.com/gureetk/kinfold/server/internal/store"
 	"github.com/gureetk/kinfold/server/internal/store/memstore"
+	"github.com/gureetk/kinfold/server/internal/tiles"
+	"github.com/gureetk/kinfold/server/internal/tiles/tilestest"
 	"github.com/gureetk/kinfold/server/internal/wire"
 )
 
@@ -115,4 +120,72 @@ func TestAdmin(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// The operator adds, replaces and removes regions and the coarse archive (API.md §13, §16).
+func TestMaps(t *testing.T) {
+	clk := clock.NewFake(1_793_635_200_000)
+	lib, err := tiles.Open(filepath.Join(t.TempDir(), "tiles"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := (&admin.Admin{Store: memstore.New(), Clock: clk, Tiles: lib}).Handler()
+	call := func(method, path, body string, want int) map[string]any {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+		if rec.Code != want {
+			t.Fatalf("%s %s: %d %s, want %d", method, path, rec.Code, rec.Body, want)
+		}
+		var out map[string]any
+		json.Unmarshal(rec.Body.Bytes(), &out)
+		return out
+	}
+	file := func(b []byte) string {
+		p := filepath.Join(t.TempDir(), "map.pmtiles")
+		if err := os.WriteFile(p, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		js, _ := json.Marshal(p)
+		return string(js)
+	}
+	bc := [4]float64{-139.1, 48.2, -114.0, 60.0}
+	a := tilestest.Archive(0, 15, bc, 4096)
+	sum := sha256.Sum256(a)
+
+	if out := call("GET", "/regions", ``, http.StatusOK); len(out["regions"].([]any)) != 0 || out["coarse"] != nil {
+		t.Fatalf("an empty library: %v", out)
+	}
+	r := call("PUT", "/regions/bc", `{"file": `+file(a)+`, "name": "British Columbia"}`, http.StatusOK)
+	if r["id"] != "bc" || r["name"] != "British Columbia" || r["sha256"] != hex.EncodeToString(sum[:]) ||
+		r["size"] != float64(len(a)) || r["updated_at"] != float64(clk.Now()) {
+		t.Fatalf("added: %v", r)
+	}
+	if got, ok := lib.Region("bc"); !ok || got.Name != "British Columbia" {
+		t.Fatal("the library hasn't got it")
+	}
+	call("PUT", "/regions/bc", `{"file": "relative.pmtiles"}`, http.StatusBadRequest)
+	call("PUT", "/regions/bc", `{"file": "/nowhere/bc.pmtiles"}`, http.StatusBadRequest)
+	call("PUT", "/regions/bc", `{"file": `+file([]byte("not a map"))+`}`, http.StatusBadRequest)
+	call("PUT", "/regions/coarse", `{"file": `+file(a)+`}`, http.StatusBadRequest)
+	call("PUT", "/coarse", `{"file": `+file(a)+`}`, http.StatusBadRequest) // zoom 15
+	c := call("PUT", "/coarse", `{"file": `+file(tilestest.Archive(0, 13, bc, 1024))+`}`, http.StatusOK)
+	if c["maxzoom"] != 13.0 {
+		t.Fatalf("coarse: %v", c)
+	}
+	if out := call("GET", "/regions", ``, http.StatusOK); len(out["regions"].([]any)) != 1 || out["coarse"] == nil {
+		t.Fatalf("the list: %v", out)
+	}
+	call("DELETE", "/regions/bc", ``, http.StatusNoContent)
+	call("DELETE", "/regions/bc", ``, http.StatusNotFound)
+	call("DELETE", "/coarse", ``, http.StatusNoContent)
+	call("DELETE", "/coarse", ``, http.StatusNotFound)
+
+	// A server without a library says so.
+	none := (&admin.Admin{Store: memstore.New(), Clock: clk}).Handler()
+	rec := httptest.NewRecorder()
+	none.ServeHTTP(rec, httptest.NewRequest("GET", "/regions", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("no library: %d", rec.Code)
+	}
 }

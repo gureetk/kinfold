@@ -3,7 +3,7 @@
 // Package admin is the operator's API (API.md §16): JSON over HTTP on a Unix socket that
 // file permissions protect, never on the network. It handles nothing encrypted and shows
 // no location, name or role. So far it covers what a first device needs: setup codes and
-// registration tokens, plus the settings, operators and repair mode.
+// registration tokens, plus the settings, operators, repair mode and the map files.
 package admin
 
 import (
@@ -14,12 +14,15 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/gureetk/kinfold/server/internal/clock"
 	"github.com/gureetk/kinfold/server/internal/identity"
 	"github.com/gureetk/kinfold/server/internal/store"
+	"github.com/gureetk/kinfold/server/internal/tiles"
 	"github.com/gureetk/kinfold/server/internal/wire"
 )
 
@@ -41,6 +44,8 @@ type Admin struct {
 	// Notify, if set, tells the devices online of a change: "repair_mode" when repair mode
 	// starts (API.md §7).
 	Notify func(code string)
+	// Tiles are the map files on offer (API.md §13); nil on a server that keeps none.
+	Tiles *tiles.Library
 }
 
 // Handler returns the HTTP handler to serve on the admin socket.
@@ -59,6 +64,11 @@ func (a *Admin) Handler() http.Handler {
 	m.HandleFunc("DELETE /repair", a.wrap(a.endRepair))
 	m.HandleFunc("PUT /operators/{account_id}", a.wrap(a.setOperator(true)))
 	m.HandleFunc("DELETE /operators/{account_id}", a.wrap(a.setOperator(false)))
+	m.HandleFunc("GET /regions", a.wrap(a.listRegions))
+	m.HandleFunc("PUT /regions/{id}", a.wrap(a.putRegion))
+	m.HandleFunc("DELETE /regions/{id}", a.wrap(a.deleteRegion))
+	m.HandleFunc("PUT /coarse", a.wrap(a.putCoarse))
+	m.HandleFunc("DELETE /coarse", a.wrap(a.deleteCoarse))
 	return m
 }
 
@@ -289,4 +299,109 @@ func (a *Admin) setOperator(on bool) func(*http.Request) (int, any, error) {
 		})
 		return http.StatusNoContent, nil, err
 	}
+}
+
+// ---- maps (API.md §13) ----
+
+func (a *Admin) library() (*tiles.Library, error) {
+	if a.Tiles == nil {
+		return nil, &httpError{http.StatusServiceUnavailable, "this server keeps no maps"}
+	}
+	return a.Tiles, nil
+}
+
+// mapFile is the file a region or the coarse archive is copied from: an absolute path the
+// server's user can read.
+func mapFile(r *http.Request) (string, string, error) {
+	var in struct {
+		File string `json:"file"`
+		Name string `json:"name"`
+	}
+	if err := decode(r, &in); err != nil {
+		return "", "", err
+	}
+	if !filepath.IsAbs(in.File) {
+		return "", "", &httpError{http.StatusBadRequest, "file is an absolute path"}
+	}
+	return in.File, in.Name, nil
+}
+
+// mapError says what was wrong with a map file, or with the region asked for.
+func mapError(err error) error {
+	switch {
+	case errors.Is(err, tiles.ErrNotFound):
+		return &httpError{http.StatusNotFound, err.Error()}
+	case errors.Is(err, tiles.ErrBadID), errors.Is(err, tiles.ErrBadName), errors.Is(err, tiles.ErrNotPMTiles),
+		errors.Is(err, tiles.ErrTooFine), errors.Is(err, fs.ErrNotExist), errors.Is(err, fs.ErrPermission):
+		return &httpError{http.StatusBadRequest, err.Error()}
+	}
+	return err
+}
+
+func (a *Admin) listRegions(*http.Request) (int, any, error) {
+	lib, err := a.library()
+	if err != nil {
+		return 0, nil, err
+	}
+	out := map[string]any{"regions": lib.Regions(), "coarse": nil}
+	if c, ok := lib.Coarse(); ok {
+		out["coarse"] = c
+	}
+	return http.StatusOK, out, nil
+}
+
+// putRegion copies a PMTiles archive in as a region, replacing any earlier file for it.
+func (a *Admin) putRegion(r *http.Request) (int, any, error) {
+	lib, err := a.library()
+	if err != nil {
+		return 0, nil, err
+	}
+	file, name, err := mapFile(r)
+	if err != nil {
+		return 0, nil, err
+	}
+	reg, err := lib.Add(r.PathValue("id"), name, file, a.Clock.Now())
+	if err != nil {
+		return 0, nil, mapError(err)
+	}
+	return http.StatusOK, reg, nil
+}
+
+func (a *Admin) deleteRegion(r *http.Request) (int, any, error) {
+	lib, err := a.library()
+	if err != nil {
+		return 0, nil, err
+	}
+	if err := lib.Remove(r.PathValue("id")); err != nil {
+		return 0, nil, mapError(err)
+	}
+	return http.StatusNoContent, nil, nil
+}
+
+// putCoarse copies in the coarse archive for the share viewer: zoom 13 at most.
+func (a *Admin) putCoarse(r *http.Request) (int, any, error) {
+	lib, err := a.library()
+	if err != nil {
+		return 0, nil, err
+	}
+	file, _, err := mapFile(r)
+	if err != nil {
+		return 0, nil, err
+	}
+	c, err := lib.SetCoarse(file, a.Clock.Now())
+	if err != nil {
+		return 0, nil, mapError(err)
+	}
+	return http.StatusOK, c, nil
+}
+
+func (a *Admin) deleteCoarse(*http.Request) (int, any, error) {
+	lib, err := a.library()
+	if err != nil {
+		return 0, nil, err
+	}
+	if err := lib.RemoveCoarse(); err != nil {
+		return 0, nil, mapError(err)
+	}
+	return http.StatusNoContent, nil, nil
 }

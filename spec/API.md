@@ -1,6 +1,6 @@
 # Kinfold HTTP API, version 0
 
-**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §12 and the part of §16 that a first device needs, with these gaps: it takes no `apns` registrations; `stream_post` isn't offered; the viewer page shows a position as text until the map of §13 is in.
+**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §13 and the part of §16 that a first device needs, with these gaps: it takes no `apns` registrations; `stream_post` isn't offered; search (§13) isn't in yet, and the operator can't yet allow closed ranges for web devices; the share viewer shows a position as text, not yet on the coarse map.
 **License:** [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 Section numbers written "spec §…" point into PROTOCOL.md. Where the two documents disagree about bytes, the spec wins.
@@ -142,7 +142,7 @@ Default rate limits. The operator can change them; clients MUST handle 429 at an
 ```
 
 - `server_info` is the only signed part. A client checks it against the server key it trusts before believing anything else (spec §13.1).
-- `features` lists what the operator has switched on. `web_devices` means direction-2 linking is available (§10); `member_tokens` means admins can mint registration tokens with invites (§9); `apns` may appear on a server that holds its own Apple key (§12).
+- `features` lists what the operator has switched on. `tiles` means the server offers at least one map region (§13); `web_devices` means direction-2 linking is available (§10); `member_tokens` means admins can mint registration tokens with invites (§9); `apns` may appear on a server that holds its own Apple key (§12).
 - `relay` is the iOS relay this server sends through. An app whose built-in relay differs warns the person that pushes won't arrive.
 - `vapid_key` is present with `webpush`. The app hands it to its UnifiedPush distributor. It lasts as long as the server's data; an app that sees a different one subscribes again with it and sends the new registration (§12).
 - `move` is present while a move is announced (spec §13.3), at the old address and the new one, for at least 90 days.
@@ -425,9 +425,10 @@ The relay and Apple see the delivery type. Neither sees what kind of alert it is
 }
 ```
 
-- **Download whole regions; never browse them.** A request for part of a map file shows the server what is on someone's screen, and with it where family members are. Apps download a region once, check its hash, and draw from the file on the phone. They MUST NOT read a region over the network tile by tile. To hold apps to that, the server answers only whole-file requests and open-ended ranges (`Range: bytes=N-`, used to resume a download) on region files. `If-Range` and `ETag` are supported.
+- **Regions.** A region's `id` is 1 to 32 lower-case letters, digits and hyphens. `bbox` is west, south, east and north in degrees and, with `minzoom` and `maxzoom`, comes from the file's PMTiles header. `size` is in bytes, and `sha256` is the file's SHA-256 in base64url. The region's file has that value in quotes as its `ETag`. When the operator replaces a region, its URL stays and its `sha256` changes.
+- **Download whole regions; never browse them.** A request for part of a map file shows the server what is on someone's screen, and with it where family members are. Apps download a region once, check its hash, and draw from the file on the phone. They MUST NOT read a region over the network tile by tile. To hold apps to that, the server answers only whole-file requests and open-ended ranges (`Range: bytes=N-`, used to resume a download) on region files; any other `Range` is 400 `bad_request`, and an offset at or past the end is 416. `If-Range` and `ETag` are supported: an app resumes with `If-Range` set to the `ETag` it started with, and gets the whole new file if the region was replaced meanwhile.
 - **The exception is the browser.** A web device can't hold a region, so the operator MAY allow closed ranges on region files for web devices. The app's settings and the web map both say what that shows the server.
-- **The coarse archive** covers the same area to zoom 13 at most and needs no session. The share viewer uses it, and so does the web map unless the operator allows more.
+- **The coarse archive** covers the same area to zoom 13 at most and needs no session. It answers any range. The share viewer uses it, and so does the web map unless the operator allows more.
 - **Search** takes `{"q": "…", "lang": "en", "limit": 5}` and optionally `"near": [lat, lon]`, and returns `{"results": [{"name", "address", "lat", "lon"}]}`. The server passes the text to the search add-on and logs nothing. Apps SHOULD send the centre of the downloaded region as `near`, never the phone's position. The server does see the text of every search, which is why search is an add-on a family can leave out.
 
 ---
@@ -503,6 +504,8 @@ The web console adds its own protections, since a console on `localhost` is a kn
 | `GET /settings`, `PATCH /settings` | `kinfold settings [--member-tokens on\|off] [--web-devices on\|off]` | `member_tokens` and `web_devices` |
 | `POST /repair`, `DELETE /repair` | `kinfold repair start [--hours 72]\|end` | Repair mode (§6), at most 72 hours |
 | `PUT /operators/{account_id}`, `DELETE …` | `kinfold operator add\|remove ACCOUNT_ID` | Who may read `/v1/server/status` |
+| `GET /regions`, `PUT /regions/{id}`, `DELETE /regions/{id}` | `kinfold region list\|add ID FILE [--name NAME]\|remove ID` | Map regions (§13). `PUT` takes `{"file", "name"}`: the server copies the file in, checks that it is a PMTiles version 3 archive, and keeps it under its SHA-256, so a file never changes under a download |
+| `PUT /coarse`, `DELETE /coarse` | `kinfold coarse set FILE\|remove` | The coarse archive (§13), refused if it goes past zoom 13 |
 
 The setup code is printed as text for now, with the server key in base64url.
 
