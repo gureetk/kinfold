@@ -16,6 +16,7 @@ A free, self-hosted family location app: native Android and iOS apps and a small
 | [`reference/python/`](reference/python/) | Reference implementation, vector generator and checker | Apache-2.0 |
 | [`reference/js/`](reference/js/) | Independent WebCrypto implementation (written from the spec alone) | Apache-2.0 |
 | [`reference/go/`](reference/go/) | Go standard-library checker for everything a server enforces (public mode); the seed of the server's protocol package | Apache-2.0 |
+| [`reference/platforms/`](reference/platforms/) | The Ed25519 edge cases run through platform libraries: the JDK, Tink, Conscrypt and Bouncy Castle (in CI), and CryptoKit (a script for a Mac) | Apache-2.0 |
 | `server/` | Go server — Phase 1 | AGPL-3.0-or-later |
 | `apps/android`, `apps/ios`, `core/` | Apps and the shared Kotlin Multiplatform core — Phase 1 | GPL-3.0-or-later with an app-store permission (draft) |
 
@@ -31,7 +32,7 @@ node reference/js/verify.mjs spec/vectors/kinfold-v0.json      # Node 22
 (cd reference/go && go run . ../../spec/vectors/kinfold-v0.json)  # Go 1.24+
 ```
 
-CI runs all three, and checks that the vectors regenerate byte for byte.
+CI runs all three, and checks that the vectors regenerate byte for byte. It also runs the Ed25519 edge cases through the JVM's libraries ([`reference/platforms/`](reference/platforms/)).
 
 ## Design in one paragraph
 
