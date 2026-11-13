@@ -18,11 +18,12 @@ go build -trimpath -o kinfold ./cmd/kinfold
 
 ## HTTP API
 
-`internal/api` implements `spec/API.md` §1 to §9: discovery and health, accounts, devices and login, circles and the member log (with the repair path), envelopes, the inbox and the WebSocket stream, silence watches, and invites. Waking devices and alerting those without a stream wait for push (§12). `internal/admin` and `cmd/kinfold` implement the part of §16 a first device needs (setup codes and registration tokens) plus settings, operators and repair mode.
+`internal/api` implements `spec/API.md` §1 to §10: discovery and health, accounts, devices and login, circles and the member log (with the repair path), envelopes, the inbox and the WebSocket stream, silence watches, invites, and the mailboxes for linking devices. Waking devices and alerting those without a stream wait for push (§12). `internal/admin` and `cmd/kinfold` implement the part of §16 a first device needs (setup codes and registration tokens) plus settings, operators and repair mode.
 
 - Storage sits behind `internal/store`, a transactional interface: every check and the write it guards run in one transaction (see Storage).
 - The stream holds no records in memory. A stored envelope wakes its recipients' streams, and each reads its records from the store after its own cursor, so it can't skip one, send one twice or grow a queue behind a slow connection. Log frames keep only the latest per circle, and events are capped. Shutting down closes every stream with 4000 first, since `http.Server.Shutdown` leaves upgraded connections alone.
 - Silence watches are checked once a minute (`CheckSilences`), against the server's clock, and only a circle envelope from the watched device resets one.
+- Link mailboxes live in memory: they last minutes, and a restart only means linking again. `SweepLinks` forgets those that have ended, every minute.
 - The clock is injected (`internal/clock`); tests set it.
 - Nothing is logged about requests: no bodies, tokens, IDs, positions or addresses.
 
@@ -78,6 +79,7 @@ go test -run '^$' -fuzz '^FuzzApply$' -fuzztime 1m ./internal/memberlog
 - **Fuzzing.** Every parser has a native fuzz target: base64url, frames, padding, certificates, bundles, chains, the server's own structures, log entries (with `Apply` on three states), envelopes and watch grants.
 - **API.** `internal/api` replays the vectors' whole main log through HTTP, each entry from a session of its author's device at its own `created_at`, then posts the vectors' envelopes and checks every inbox. It also tests `bad_time` through the API with the clock injected, sessions and login, rate limits, body limits, API revisions, the unsynchronized clock, repair mode, a removed device's read access, invites with their limits, waiting reads and inviters who leave, and refused requests counting against the limits. `internal/admin` is tested on its own: setup codes, tokens, settings, repair mode and operators.
 - **End to end.** `internal/e2e` drives a server with two clients built on the Python reference: register from a setup code, create a circle, invite and join, then send an envelope each way and fetch and open it.
+- **Linking.** The vectors' three exchanges go through the mailbox slot by slot, response signatures included; then the order of slots, one writer per slot, other accounts, bytes the server can tell are wrong, a waiting read, the end of a mailbox, and direction 2's switch and limit. `FuzzLinkMessage` fuzzes the check of the clear parts.
 - **Watches.** The vectors' grants, then grants signed in the tests: who may register, renew and end a watch, the silence counted from registration and from the last circle envelope (a direct one doesn't count), the wake-up wait and a single alert, signed for its recipient, `watch_ended` for each reason, and a revoked grant that can't come back.
 - **Stream.** Tests on a real listener, against the WebSocket client of the same library: records waiting and live, cursors shared with the inbox, log frames and the `removed` event, `join_request`, notices, and every way a stream ends (replaced, logged out, deregistered, rate limited, idle, session over, restarting), with the intervals shortened.
 - **Storage.** See Storage above. `internal/api` runs on SQLite, and once more on memory in CI. A test sweeps a closed circle away through the API's retention.

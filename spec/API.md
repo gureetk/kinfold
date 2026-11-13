@@ -1,6 +1,6 @@
 # Kinfold HTTP API, version 0
 
-**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §9 and the part of §16 that a first device needs. Until push (§12) is in, it wakes no device, and silence alerts reach only devices with a stream open; `stream_post` isn't offered.
+**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §10 and the part of §16 that a first device needs. Until push (§12) is in, it wakes no device, and silence alerts reach only devices with a stream open; `stream_post` isn't offered.
 **License:** [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 Section numbers written "spec §…" point into PROTOCOL.md. Where the two documents disagree about bytes, the spec wins.
@@ -113,6 +113,7 @@ Default rate limits. The operator can change them; clients MUST handle 429 at an
 | `Kinfold-Wake: locate` | 6 an hour per sender and recipient |
 | Pending invites | 16 per circle; 3 waiting requests per invite |
 | Link mailboxes without a session | 6 an hour per address, 60 an hour for the whole server |
+| Link mailboxes with a session | 20 an hour per device |
 | Share links | 5 open per device; one update every 5 seconds |
 | Search | 30 a minute per device |
 | Stored envelopes | 512 MB per circle; the oldest are dropped first |
@@ -328,12 +329,13 @@ The slots are `offer`, `commit`, `nonce`, `request` and `response` (spec §10.2)
 | `request` | The new device | — | P |
 | `response` | The existing phone | P | — |
 
-- **Creating a mailbox.** In direction 1 the existing phone creates it; it lives at most 120 seconds. In direction 2 the new device creates it without a session; it lives at most 300 seconds, exists only on servers with `web_devices`, and is rate-limited per address and for the whole server.
+- **Creating a mailbox.** In direction 1 the existing phone creates it; it lives at most 120 seconds. In direction 2 the new device creates it without a session; it lives at most 300 seconds, exists only on servers with `web_devices` (403 otherwise), and is rate-limited per address and for the whole server. An `expires_at` that isn't in the future or is too far away is 400. A `link_id` in use is 409 `slot_taken`; the same mailbox posted again is 201.
 - **One account.** A mailbox belongs to the account that created it (direction 1) or that wrote its `offer` (direction 2). Every later call that needs a session must come from that account.
-- **Once, and in order.** Each slot is written once (409 `slot_taken`). `nonce` can't be written before `commit`, `request` before `nonce`, or `response` before `request` (409 `out_of_order`). The order is part of what makes the confirmation code trustworthy (spec §10.2).
+- **Once, and in order.** Each slot is written once: the same bytes again succeed, different bytes are 409 `slot_taken`. `commit` can't be written before `offer` in direction 2, `nonce` before `commit`, `request` before `nonce`, or `response` before `request` (409 `out_of_order`). The order is part of what makes the confirmation code trustworthy (spec §10.2). Direction 1 has no `offer` slot (404).
+- **What the server checks.** Of a `LinkMessage`: version 0, the path's `link_id`, the slot's `msg_type`, a nonce and a ciphertext, and nothing after. Of the `LinkResponse`: version 0, the `link_id`, the session's own device certificate, `enc`, a ciphertext and a signature under that device's key. Anything else is 422 `malformed`.
 - **Waiting.** `wait` holds a read open for up to 25 seconds.
 - **The new device.** Before it writes `response`, the existing phone registers the new device (§5) and appends `ADD_DEVICE` to its circles.
-- **Ending.** A mailbox is deleted at `expires_at`, or 60 seconds after its `response` is first read.
+- **Ending.** A mailbox ends at `expires_at`, or 60 seconds after its `response` is first read; calls about it then get 410 `gone`, until the server deletes it within the minute. Mailboxes are kept in memory only, so a restart ends them too and the devices start again.
 
 The server can read none of the messages. Knowing `link_id` is what lets the new device use the mailbox, and `link_id` comes from the code on a screen.
 
