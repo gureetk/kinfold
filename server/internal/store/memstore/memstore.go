@@ -502,14 +502,37 @@ func (t *tx) Sweep(now uint64, r store.Retention) (store.Swept, error) {
 	// Envelopes are a slice in order of arrival.
 	old := t.s.envelopes
 	var kept []store.Envelope
+	held := map[string]uint64{} // bytes each circle holds
 	for _, e := range old {
 		if now >= e.ExpiresAt || gone[string(e.Circle)] {
 			n.Envelopes++
 		} else {
 			kept = append(kept, e)
+			held[string(e.Circle)] += uint64(len(e.Raw))
 		}
 	}
-	if n.Envelopes > 0 {
+	// A circle over CircleBytes loses its oldest envelopes until it isn't.
+	if r.CircleBytes > 0 {
+		excess := map[string]uint64{}
+		for c, b := range held {
+			if b > r.CircleBytes {
+				excess[c] = b - r.CircleBytes
+			}
+		}
+		if len(excess) > 0 {
+			trimmed := kept[:0:0]
+			for _, e := range kept {
+				if x := excess[string(e.Circle)]; x > 0 {
+					excess[string(e.Circle)] = x - min(x, uint64(len(e.Raw)))
+					n.Dropped++
+					continue
+				}
+				trimmed = append(trimmed, e)
+			}
+			kept = trimmed
+		}
+	}
+	if n.Envelopes > 0 || n.Dropped > 0 {
 		t.undo = append(t.undo, func() { t.s.envelopes = old })
 		t.s.envelopes = kept
 	}

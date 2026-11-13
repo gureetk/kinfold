@@ -962,6 +962,56 @@ func (t *tx) Sweep(now uint64, r store.Retention) (store.Swept, error) {
 		delete(t.pending, string(id))
 	}
 	count(&n.Envelopes, `DELETE FROM envelopes WHERE expires_at <= ?`, at)
+	if err == nil && r.CircleBytes > 0 {
+		err = t.trimCircles(r.CircleBytes, &n.Dropped)
+	}
 	t.gone = append(t.gone, gone...)
 	return n, err
+}
+
+// trimCircles drops the oldest envelopes of each circle whose stored envelopes hold more
+// than limit bytes, until it holds no more.
+func (t *tx) trimCircles(limit uint64, dropped *int) error {
+	rows, err := t.q.Query(`SELECT circle, SUM(LENGTH(raw)) FROM envelopes GROUP BY circle HAVING SUM(LENGTH(raw)) > ?`, i64(limit))
+	if err != nil {
+		return err
+	}
+	type over struct {
+		circle []byte
+		excess int64
+	}
+	var overs []over
+	for rows.Next() {
+		var o over
+		var total int64
+		if err := rows.Scan(&o.circle, &total); err != nil {
+			rows.Close()
+			return err
+		}
+		o.excess = total - i64(limit)
+		overs = append(overs, o)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, o := range overs {
+		// The last envelope to drop is the one at which the oldest add up to the excess.
+		var upto int64
+		err := t.q.QueryRow(`SELECT seq FROM (SELECT seq, SUM(LENGTH(raw)) OVER (ORDER BY seq) AS run FROM envelopes
+			WHERE circle = ?) WHERE run >= ? ORDER BY seq LIMIT 1`, o.circle, o.excess).Scan(&upto)
+		if err != nil {
+			return err
+		}
+		res, err := t.q.Exec(`DELETE FROM envelopes WHERE circle = ? AND seq <= ?`, o.circle, upto)
+		if err != nil {
+			return err
+		}
+		k, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		*dropped += int(k)
+	}
+	return nil
 }

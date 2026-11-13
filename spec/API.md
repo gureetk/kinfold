@@ -1,6 +1,6 @@
 # Kinfold HTTP API, version 0
 
-**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §13 and the part of §16 that a first device needs, with these gaps: it takes no `apns` registrations; it doesn't yet hold stored envelopes to 512 MB per circle (§3); the share viewer shows a position as text, not yet on the coarse map.
+**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §13 and the part of §16 that a first device needs, with these gaps: it takes no `apns` registrations; the share viewer shows a position as text, not yet on the coarse map.
 **License:** [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 Section numbers written "spec §…" point into PROTOCOL.md. Where the two documents disagree about bytes, the spec wins.
@@ -117,7 +117,7 @@ Default rate limits. The operator can change them (`kinfold limits`, §16); clie
 | Link mailboxes with a session | 20 an hour per device | `links_per_device` |
 | Share links | 5 open per device; one update every 5 seconds | `shares_per_device`; the 5 seconds are fixed |
 | Search | 30 a minute per device | `search_per_minute` |
-| Stored envelopes | 512 MB per circle; the oldest are dropped first | Fixed |
+| Stored envelopes | 512 MB per circle; the oldest are dropped first, by the sweep each minute (§15). Their replay records stay, so a dropped envelope can't be stored again | Fixed |
 
 ---
 
@@ -482,7 +482,8 @@ What has run out is refused at once and deleted by a sweep every minute:
 - a removed device's access to the log after 30 days (§6);
 - watches the watched account deleted, when their grant would have run out (§8);
 - closed circles 30 days after their last member left, with everything that names them;
-- link mailboxes within a minute of ending, and share links when they expire, at most 24 hours after they were made (§10, §11).
+- link mailboxes within a minute of ending, and share links when they expire, at most 24 hours after they were made (§10, §11);
+- a circle's oldest envelopes, while its stored envelopes hold more than 512 MB (§3).
 
 A silence check runs once a minute.
 

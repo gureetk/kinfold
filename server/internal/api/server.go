@@ -121,8 +121,14 @@ func New(cfg Config) *Server {
 // ServerKey is the server's public key.
 func (s *Server) ServerKey() ed25519.PublicKey { return s.cfg.Key.Public().(ed25519.PublicKey) }
 
-// Retention is how long the server keeps what has ended (API.md §15).
-var Retention = store.Retention{Removals: RemovedReadLife, Results: ResultKeep, ClosedCircles: ClosedKeep}
+// CircleBytes is the most a circle's stored envelopes may hold; past it the oldest are
+// dropped (API.md §3).
+const CircleBytes = 512 << 20
+
+// Retention is how long the server keeps what has ended (API.md §15), and how much
+// (§3).
+var Retention = store.Retention{Removals: RemovedReadLife, Results: ResultKeep, ClosedCircles: ClosedKeep,
+	CircleBytes: CircleBytes}
 
 // Sweep deletes what has run out (API.md §15). The server runs it every minute.
 func (s *Server) Sweep() (store.Swept, error) {
