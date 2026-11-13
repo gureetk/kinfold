@@ -124,7 +124,7 @@ func (s *Server) postJoinRequest(q *request) error {
 	if !joinMessage(raw, id) {
 		return refused("malformed", nil)
 	}
-	err = s.cfg.Store.Update(func(tx store.Tx) error {
+	err = s.update(q, func(tx store.Tx) error {
 		if err := s.session(q, tx, phone); err != nil {
 			return err
 		}
@@ -147,6 +147,13 @@ func (s *Server) postJoinRequest(q *request) error {
 		if !slices.ContainsFunc(inv.Askers, func(d []byte) bool { return bytes.Equal(d, q.dev.ID) }) {
 			inv.Askers = append(slices.Clone(inv.Askers), q.dev.ID)
 		}
+		// The inviter's phones and tablets hear of it on their streams.
+		devs, err := tx.DevicesOf(inv.Account)
+		if err != nil {
+			return err
+		}
+		devs = slices.DeleteFunc(devs, func(d store.Device) bool { return !allowed(d.Kind, phone) })
+		q.afterCommit(func() { s.tellDevices(devs, map[string]any{"type": "join_request", "invite_id": b64(id)}) })
 		return tx.PutInvite(inv)
 	})
 	if err != nil {

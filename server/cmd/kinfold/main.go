@@ -108,7 +108,7 @@ func serve(args []string) error {
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second,
 		IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 16 << 10,
 		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13}}
-	adminSrv := &http.Server{Handler: (&admin.Admin{Store: st, Clock: clk, Key: key, URL: *url}).Handler(),
+	adminSrv := &http.Server{Handler: (&admin.Admin{Store: st, Clock: clk, Key: key, URL: *url, Notify: handler.Notice}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second}
 
 	sock := filepath.Join(*data, "admin.sock")
@@ -138,6 +138,7 @@ func serve(args []string) error {
 	case err = <-errs:
 	case <-stop:
 	}
+	handler.CloseStreams(5 * time.Second) // Shutdown leaves upgraded connections alone
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	srv.Shutdown(ctx)

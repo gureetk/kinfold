@@ -65,7 +65,7 @@ func (s *Server) createCircle(q *request) error {
 		return err
 	}
 	var cid []byte
-	err = s.cfg.Store.Update(func(tx store.Tx) error {
+	err = s.update(q, func(tx store.Tx) error {
 		if err := s.session(q, tx, phone); err != nil {
 			return err
 		}
@@ -96,6 +96,7 @@ func (s *Server) createCircle(q *request) error {
 			return errForbidden
 		}
 		cid = ns.CircleID
+		q.afterCommit(func() { s.tellLog(cid, nil, ns) })
 		return tx.CreateCircle(store.Circle{ID: cid, State: ns, CreatedAt: q.now}, raw)
 	})
 	if err != nil {
@@ -205,7 +206,7 @@ func (s *Server) append(q *request, repairPath bool) error {
 		return err
 	}
 	var result map[string]any
-	err = s.cfg.Store.Update(func(tx store.Tx) error {
+	err = s.update(q, func(tx store.Tx) error {
 		if err := s.session(q, tx, anyDevice); err != nil {
 			return err
 		}
@@ -248,6 +249,8 @@ func (s *Server) append(q *request, repairPath bool) error {
 		if err := tx.AppendEntry(id, raw, ns, q.now); err != nil {
 			return err
 		}
+		old := c.State
+		q.afterCommit(func() { s.tellLog(id, old, ns) })
 		if err := s.afterAppend(q, tx, id, c.State, ns, e); err != nil {
 			return err
 		}

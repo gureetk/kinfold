@@ -60,7 +60,7 @@ func (s *Server) postEnvelope(q *request) error {
 		return err
 	}
 	var receivedAt uint64
-	err = s.cfg.Store.Update(func(tx store.Tx) error {
+	err = s.update(q, func(tx store.Tx) error {
 		if err := s.session(q, tx, receiving); err != nil {
 			return err
 		}
@@ -100,10 +100,12 @@ func (s *Server) postEnvelope(q *request) error {
 			return nil
 		}
 		receivedAt = q.now
-		if _, err := tx.PutEnvelope(store.Envelope{Circle: id, Sender: env.Sender, Recipients: env.Recipients(),
+		recipients := env.Recipients()
+		if _, err := tx.PutEnvelope(store.Envelope{Circle: id, Sender: env.Sender, Recipients: recipients,
 			ReceivedAt: q.now, ExpiresAt: q.now + uint64(env.TTL)*second, Raw: raw}); err != nil {
 			return err
 		}
+		q.afterCommit(func() { s.tellRecords(recipients) })
 		// Pushes for Kinfold-Wake come with push registration (API.md §12): until then the
 		// envelope waits for the recipient's next fetch.
 		return tx.PutSeen(id, env.Sender, env.Seq, store.SeenRecord{Digest: sha256.Sum256(raw), ReceivedAt: q.now,
@@ -128,13 +130,9 @@ func firstErr(errs ...error) error {
 // inbox is GET /v1/inbox?since=&limit=: delivery records, u64 received_at ‖ envelope, for
 // the circles in which the device is still an active receiving device.
 func (s *Server) inbox(q *request) error {
-	var since uint64
-	if v := q.r.URL.Query().Get("since"); v != "" {
-		c, err := wire.DecodeB64u(v)
-		if err != nil || len(c) != 8 {
-			return badRequest("bad cursor")
-		}
-		since = wire.NewReader(c).U64()
+	since, err := cursorParam(q)
+	if err != nil {
+		return err
 	}
 	limit := maxInboxPage
 	if v := q.r.URL.Query().Get("limit"); v != "" {
@@ -146,7 +144,7 @@ func (s *Server) inbox(q *request) error {
 	}
 	var envs []store.Envelope
 	var more bool
-	err := s.cfg.Store.View(func(tx store.Tx) error {
+	err = s.cfg.Store.View(func(tx store.Tx) error {
 		if err := s.session(q, tx, receiving); err != nil {
 			return err
 		}
@@ -166,7 +164,7 @@ func (s *Server) inbox(q *request) error {
 		out = wire.AppendFrame(out, wire.Concat(wire.U64(e.ReceivedAt), e.Raw))
 		cursor = e.Seq
 	}
-	q.w.Header().Set("Kinfold-Cursor", wire.EncodeB64u(wire.U64(cursor)))
+	q.w.Header().Set("Kinfold-Cursor", cursorText(cursor))
 	if more {
 		q.w.Header().Set("Kinfold-More", "1")
 	}

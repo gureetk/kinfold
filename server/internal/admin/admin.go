@@ -38,6 +38,9 @@ type Admin struct {
 	Key    ed25519.PrivateKey
 	URL    string
 	Random io.Reader // crypto/rand if nil
+	// Notify, if set, tells the devices online of a change: "repair_mode" when repair mode
+	// starts (API.md §7).
+	Notify func(code string)
 }
 
 // Handler returns the HTTP handler to serve on the admin socket.
@@ -247,6 +250,9 @@ func (a *Admin) startRepair(r *http.Request) (int, any, error) {
 		st.RepairUntil = a.Clock.Now() + in.Hours*hour
 		return tx.PutSettings(st)
 	})
+	if err == nil && a.Notify != nil {
+		a.Notify("repair_mode")
+	}
 	return http.StatusOK, settingsJSON(st), err
 }
 
