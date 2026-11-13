@@ -1,6 +1,6 @@
 # Kinfold HTTP API, version 0
 
-**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §13 and the part of §16 that a first device needs, with these gaps: it takes no `apns` registrations; `stream_post` isn't offered; search (§13) isn't in yet, and the operator can't yet allow closed ranges for web devices; the share viewer shows a position as text, not yet on the coarse map.
+**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §13 and the part of §16 that a first device needs, with these gaps: it takes no `apns` registrations; `stream_post` isn't offered; the operator can't yet allow closed ranges for web devices (§13); the share viewer shows a position as text, not yet on the coarse map.
 **License:** [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 Section numbers written "spec §…" point into PROTOCOL.md. Where the two documents disagree about bytes, the spec wins.
@@ -78,7 +78,7 @@ Errors are JSON: `{"error": "<code>", "message": "<text for developers>"}` plus 
 | 426 | `update_required` | The client's API revision is too old. Carries `api_min` |
 | 429 | `rate_limited` | Too many requests. Carries a `Retry-After` header |
 | 503 | `repair_mode` | A normal log append while the server is in repair mode (§6) |
-| 503 | `unavailable` | The server is starting, stopping, or its clock isn't synchronized |
+| 503 | `unavailable` | The server is starting, stopping, or its clock isn't synchronized; or the search add-on isn't answering (§13) |
 
 A server whose clock isn't synchronized MUST NOT answer anything but `/healthz`: a wrong `Kinfold-Time` would mislead every phone.
 
@@ -142,7 +142,7 @@ Default rate limits. The operator can change them; clients MUST handle 429 at an
 ```
 
 - `server_info` is the only signed part. A client checks it against the server key it trusts before believing anything else (spec §13.1).
-- `features` lists what the operator has switched on. `tiles` means the server offers at least one map region (§13); `web_devices` means direction-2 linking is available (§10); `member_tokens` means admins can mint registration tokens with invites (§9); `apns` may appear on a server that holds its own Apple key (§12).
+- `features` lists what the operator has switched on. `tiles` means the server offers at least one map region and `search` that the search add-on is installed (§13); `web_devices` means direction-2 linking is available (§10); `member_tokens` means admins can mint registration tokens with invites (§9); `apns` may appear on a server that holds its own Apple key (§12).
 - `relay` is the iOS relay this server sends through. An app whose built-in relay differs warns the person that pushes won't arrive.
 - `vapid_key` is present with `webpush`. The app hands it to its UnifiedPush distributor. It lasts as long as the server's data; an app that sees a different one subscribes again with it and sends the new registration (§12).
 - `move` is present while a move is announced (spec §13.3), at the old address and the new one, for at least 90 days.
@@ -430,6 +430,13 @@ The relay and Apple see the delivery type. Neither sees what kind of alert it is
 - **The exception is the browser.** A web device can't hold a region, so the operator MAY allow closed ranges on region files for web devices. The app's settings and the web map both say what that shows the server.
 - **The coarse archive** covers the same area to zoom 13 at most and needs no session. It answers any range. The share viewer uses it, and so does the web map unless the operator allows more.
 - **Search** takes `{"q": "…", "lang": "en", "limit": 5}` and optionally `"near": [lat, lon]`, and returns `{"results": [{"name", "address", "lat", "lon"}]}`. The server passes the text to the search add-on and logs nothing. Apps SHOULD send the centre of the downloaded region as `near`, never the phone's position. The server does see the text of every search, which is why search is an add-on a family can leave out.
+- **Search fields.**
+  - `q` is 1 to 256 bytes without control characters; longer is 413.
+  - `lang` is a two-letter code. A language the add-on's index lacks gives the names in the index's default language rather than an error.
+  - `limit` is 1 to 10, 5 if left out.
+  - `near`, `lat` and `lon` are in degrees.
+  - `address` is the house number and street, then the place, state and country, as far as the add-on knows them. A result without a name of its own is named by its street address.
+  - A server without the add-on answers 404, and one whose add-on doesn't answer, 503 `unavailable`.
 
 ---
 

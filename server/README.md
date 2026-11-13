@@ -29,9 +29,13 @@ pmtiles extract https://build.protomaps.com/YYYYMMDD.pmtiles coarse.pmtiles --bb
 
 `kinfold region list` shows what is on offer. Adding a region under an ID it already has replaces it.
 
+### Search
+
+Address search is an add-on: a [Photon](https://github.com/komoot/photon) instance with a country or region index, run beside the server on the loopback interface with its request log off. `--search http://127.0.0.1:2322` points the server at it. Without it, the server offers no search, and apps drop pins instead.
+
 ## HTTP API
 
-`internal/api` implements `spec/API.md` §1 to §13 but search: discovery and health, accounts, devices and login, circles and the member log (with the repair path), envelopes, the inbox and the WebSocket stream, silence watches, invites, the mailboxes for linking devices, share links with their viewer page, push through the iOS relay and Web Push, and map regions. `internal/admin` and `cmd/kinfold` implement the part of §16 a first device needs (setup codes and registration tokens) plus settings, operators, repair mode and the map files.
+`internal/api` implements `spec/API.md` §1 to §13: discovery and health, accounts, devices and login, circles and the member log (with the repair path), envelopes, the inbox and the WebSocket stream, silence watches, invites, the mailboxes for linking devices, share links with their viewer page, push through the iOS relay and Web Push, map regions and address search. `internal/admin` and `cmd/kinfold` implement the part of §16 a first device needs (setup codes and registration tokens) plus settings, operators, repair mode and the map files.
 
 - Storage sits behind `internal/store`, a transactional interface: every check and the write it guards run in one transaction (see Storage).
 - The stream holds no records in memory. A stored envelope wakes its recipients' streams, and each reads its records from the store after its own cursor, so it can't skip one, send one twice or grow a queue behind a slow connection. Log frames keep only the latest per circle, and events are capped. Shutting down closes every stream with 4000 first, since `http.Server.Shutdown` leaves upgraded connections alone.
@@ -40,6 +44,7 @@ pmtiles extract https://build.protomaps.com/YYYYMMDD.pmtiles coarse.pmtiles --bb
 - Web Push (RFC 8291 and RFC 8292) is built from the standard library's ECDH, HKDF, AES-GCM and ECDSA; RFC 8291's own example checks it byte for byte. Each send resolves the host and checks its addresses again, then connects to an address it checked, over a connection of its own. A failed push is logged without the endpoint or the host's address.
 - The share-link viewer (`internal/api/viewer`) is one static page and two scripts, served with a content security policy that keeps it to this server. `share.js` derives the link's ID and key from the address's fragment and opens updates on WebCrypto alone; `viewer.js` shows the position as text until the map (§13) exists.
 - Map files live in `internal/tiles`: each is copied in, its PMTiles header checked against its size, and stored under its SHA-256, with `index.json` naming the regions. A replaced file is deleted at once; a download under way keeps reading it. A region is served whole or from an offset to its end, never in parts, with a write deadline that allows 32 KiB a second.
+- A search goes to Photon's `/api` with the text, language, limit and bias, and nothing about who asked. Neither the text nor an error that would quote it is logged. A language the index lacks is dropped and the search tried again.
 - Link mailboxes live in memory: they last minutes, and a restart only means linking again. `SweepLinks` forgets those that have ended, every minute.
 - The clock is injected (`internal/clock`); tests set it.
 - Nothing is logged about requests: no bodies, tokens, IDs, positions or addresses.
@@ -99,6 +104,12 @@ go test -run '^$' -fuzz '^FuzzApply$' -fuzztime 1m ./internal/memberlog
 - **Push.** Against a fake relay: `Kinfold-Wake: notify` and `locate`, each push's relay signature checked and opened with the device's key from the vectors (type, body, server signature), no push to a device on its stream, a dead token dropped and `push_dropped` on the next stream, the silence wake-up and alert, the wake limit refusing the upload, and what a registration may hold, address rules included.
 - **Web Push.** The encryption against RFC 8291's example, both ways. Against a fake push host on TLS: the headers, the VAPID token (claims and signature), the message opened as a subscription opens it and then with the device's key, `locate` looking like `notify`, a connection per push, and a 410 ending the registration. A host that resolves to a private address at send time gets no connection, and what the log says about a failure names no endpoint or address.
 - **Maps.** The header checks against hand-broken archives and `FuzzParseHeader`; the library copying, replacing, removing, refusing and reopening, with what it leaves on disk each time. Over a real listener: the list, whole and resumed downloads, `If-Range` and `If-None-Match`, every other kind of range refused for phones and browsers alike, HEAD, the coarse archive in any range without a session, and a download that finishes on the old file while its region is replaced. `internal/admin` adds and removes regions and the coarse archive.
+- **Search.** Against a fake Photon:
+  - what the add-on is sent, and how its GeoJSON becomes names, addresses and positions, with broken entries skipped;
+  - who may search, and every field it refuses;
+  - an unknown language dropped;
+  - an add-on that fails, answers nonsense or too much, or is gone;
+  - the per-device limit, and a server without the add-on.
 - **Share links.** Making, updating, reading and ending a link, who may do each, the checks on an update, the 5-second and 5-link limits, a waiting viewer, the page's headers and the `share_view` event. `TestViewerScript` runs `viewer/share_test.mjs` under Node when it is installed (CI has it): `share.js` against the vectors' `share_link` group, and what it must refuse.
 - **Linking.** The vectors' three exchanges go through the mailbox slot by slot, response signatures included; then the order of slots, one writer per slot, other accounts, bytes the server can tell are wrong, a waiting read, the end of a mailbox, and direction 2's switch and limit. `FuzzLinkMessage` fuzzes the check of the clear parts.
 - **Watches.** The vectors' grants, then grants signed in the tests: who may register, renew and end a watch, the silence counted from registration and from the last circle envelope (a direct one doesn't count), the wake-up wait and a single alert, signed for its recipient, `watch_ended` for each reason, and a revoked grant that can't come back.

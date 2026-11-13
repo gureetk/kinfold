@@ -38,6 +38,9 @@ func (s *Server) discovery(q *request) error {
 	if s.cfg.Tiles != nil && len(s.cfg.Tiles.Regions()) > 0 {
 		features = append(features, "tiles")
 	}
+	if s.cfg.Search != "" {
+		features = append(features, "search")
+	}
 	if st.WebDevices {
 		features = append(features, "web_devices")
 	}

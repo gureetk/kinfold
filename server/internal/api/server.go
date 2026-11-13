@@ -78,19 +78,23 @@ type Config struct {
 	Push PushConfig
 	// Tiles are the map files on offer (API.md §13); none if nil.
 	Tiles *tiles.Library
+	// Search is the search add-on's base URL, a Photon instance (API.md §13); no search if
+	// empty.
+	Search string
 }
 
 // Server is the HTTP API.
 type Server struct {
-	cfg     Config
-	mux     *http.ServeMux
-	limiter *limiter
-	waits   *hub
-	streams *streams
-	links   *mailboxes
-	sending chan struct{} // pushes in flight
-	webPush *http.Client
-	start   uint64
+	cfg      Config
+	mux      *http.ServeMux
+	limiter  *limiter
+	waits    *hub
+	streams  *streams
+	links    *mailboxes
+	sending  chan struct{} // pushes in flight
+	webPush  *http.Client
+	searcher *http.Client
+	start    uint64
 
 	infoMu sync.Mutex
 	info   []byte
@@ -106,7 +110,7 @@ func New(cfg Config) *Server {
 	cfg.Push = cfg.Push.withDefaults()
 	s := &Server{cfg: cfg, mux: http.NewServeMux(), limiter: newLimiter(cfg.Limits.withDefaults()), waits: newHub(),
 		streams: newStreams(), links: newMailboxes(), sending: make(chan struct{}, maxSending), start: cfg.Clock.Now()}
-	s.webPush = s.webPushClient()
+	s.webPush, s.searcher = s.webPushClient(), searchClient()
 	s.routes()
 	return s
 }
@@ -160,6 +164,7 @@ func (s *Server) routes() {
 
 	h("GET /v1/tiles", s.listTiles)
 	h("GET /tiles/{file}", s.tileFile)
+	h("POST /v1/search", s.search)
 
 	h("PUT /v1/circles/{id}/watches/{device_id}", s.putWatch)
 	h("GET /v1/circles/{id}/watches", s.listWatches)
@@ -395,6 +400,7 @@ const (
 	phone             // P: a phone or tablet
 	receiving         // R: phone, tablet, web or Home Assistant
 	phoneOrKit        // P+K: a phone or tablet, or the account's recovery device
+	phoneOrWeb        // a phone or tablet, or a web device
 )
 
 func allowed(kind uint8, who int) bool {
@@ -405,6 +411,8 @@ func allowed(kind uint8, who int) bool {
 		return identity.Receiving(kind)
 	case phoneOrKit:
 		return identity.PhoneOrTablet(kind) || kind == identity.Recovery
+	case phoneOrWeb:
+		return identity.PhoneOrTablet(kind) || kind == identity.Web
 	}
 	return true
 }
@@ -462,6 +470,7 @@ type Limits struct {
 	LinksPerAddress      int // link mailboxes an hour without a session, per address (direction 2)
 	LinksPerServer       int // link mailboxes an hour without a session, for the whole server
 	SharesPerDevice      int // share links open at once, per device
+	SearchPerMinute      int // searches, per device
 	PendingInvites       int // per circle
 	WaitingRequests      int // per invite
 }
@@ -485,6 +494,7 @@ func (l Limits) withDefaults() Limits {
 	def(&l.LinksPerAddress, 6)
 	def(&l.LinksPerServer, 60)
 	def(&l.SharesPerDevice, 5)
+	def(&l.SearchPerMinute, 30)
 	def(&l.PendingInvites, 16)
 	def(&l.WaitingRequests, 3)
 	return l
