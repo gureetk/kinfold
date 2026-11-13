@@ -268,9 +268,9 @@ func TestPushDiscovery(t *testing.T) {
 		features   []string
 		relay, key any
 	}{
-		{"neither", func(*api.Config) {}, []string{"member_tokens", "web_devices"}, nil, nil},
+		{"neither", func(*api.Config) {}, []string{"member_tokens", "stream_post", "web_devices"}, nil, nil},
 		{"both", func(c *api.Config) { c.Push.Relay, c.Push.VAPID = "https://relay.example", vapid },
-			[]string{"member_tokens", "relay", "web_devices", "webpush"}, "https://relay.example", b64(pub)},
+			[]string{"member_tokens", "relay", "stream_post", "web_devices", "webpush"}, "https://relay.example", b64(pub)},
 	} {
 		e := newEnv(t, generous, tc.opt)
 		d := decode(t, e.do(call{method: "GET", path: "/.well-known/kinfold"}))

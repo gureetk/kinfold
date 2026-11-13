@@ -301,6 +301,15 @@ func refused(reason string, extra map[string]any) *apiError {
 }
 
 func writeError(w http.ResponseWriter, err error) {
+	e, body := errorBody(err)
+	if e.retryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(e.retryAfter))
+	}
+	writeJSON(w, e.status, body)
+}
+
+// errorBody is the JSON an error is answered with (API.md §2).
+func errorBody(err error) (*apiError, map[string]any) {
 	var e *apiError
 	if !errors.As(err, &e) {
 		// Nothing about the request is logged (API.md §1); the error text is generic.
@@ -310,10 +319,7 @@ func writeError(w http.ResponseWriter, err error) {
 	for k, v := range e.extra {
 		body[k] = v
 	}
-	if e.retryAfter > 0 {
-		w.Header().Set("Retry-After", strconv.Itoa(e.retryAfter))
-	}
-	writeJSON(w, e.status, body)
+	return e, body
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

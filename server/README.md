@@ -38,6 +38,7 @@ Address search is an add-on: a [Photon](https://github.com/komoot/photon) instan
 `internal/api` implements `spec/API.md` §1 to §13: discovery and health, accounts, devices and login, circles and the member log (with the repair path), envelopes, the inbox and the WebSocket stream, silence watches, invites, the mailboxes for linking devices, share links with their viewer page, push through the iOS relay and Web Push, map regions and address search. `internal/admin` and `cmd/kinfold` implement the part of §16 a first device needs (setup codes and registration tokens) plus settings, operators, repair mode and the map files.
 
 - Storage sits behind `internal/store`, a transactional interface: every check and the write it guards run in one transaction (see Storage).
+- A device may also upload on its stream (`stream_post`): each post goes through the same code as the upload call, checked against the session that opened the stream, and is answered in order with what the call would have said.
 - The stream holds no records in memory. A stored envelope wakes its recipients' streams, and each reads its records from the store after its own cursor, so it can't skip one, send one twice or grow a queue behind a slow connection. Log frames keep only the latest per circle, and events are capped. Shutting down closes every stream with 4000 first, since `http.Server.Shutdown` leaves upgraded connections alone.
 - Silence watches are checked once a minute (`CheckSilences`), against the server's clock, and only a circle envelope from the watched device resets one.
 - Pushes are built, signed and sealed inside the transaction that calls for them, and sent after it commits, in the background, at most 16 at a time, and never to a device with a stream open. A Web Push endpoint must be https and resolve to public addresses only, unless the operator lists its host (`--push-hosts`).
@@ -114,6 +115,13 @@ go test -run '^$' -fuzz '^FuzzApply$' -fuzztime 1m ./internal/memberlog
 - **Linking.** The vectors' three exchanges go through the mailbox slot by slot, response signatures included; then the order of slots, one writer per slot, other accounts, bytes the server can tell are wrong, a waiting read, the end of a mailbox, and direction 2's switch and limit. `FuzzLinkMessage` fuzzes the check of the clear parts.
 - **Watches.** The vectors' grants, then grants signed in the tests: who may register, renew and end a watch, the silence counted from registration and from the last circle envelope (a direct one doesn't count), the wake-up wait and a single alert, signed for its recipient, `watch_ended` for each reason, and a revoked grant that can't come back.
 - **Stream.** Tests on a real listener, against the WebSocket client of the same library: records waiting and live, cursors shared with the inbox, log frames and the `removed` event, `join_request`, notices, and every way a stream ends (replaced, logged out, deregistered, rate limited, idle, session over, restarting), with the intervals shortened.
+- **Posting on the stream.**
+  - A post stored and delivered to a recipient's stream at once.
+  - Posting twice with the first answer.
+  - Every refusal of the upload call, as a result: the sender, the wake, malformed, a bad signature with the circle's `seq` and `head`, another circle, and an unsynchronized clock.
+  - A post larger than the WebSocket library's default limit.
+  - 429 with `retry_after`.
+  - The messages that close the stream with 1008 or 1009.
 - **Storage.** See Storage above. `internal/api` runs on SQLite, and once more on memory in CI. A test sweeps a closed circle away through the API's retention.
 - **Differential run.** `internal/difftest` feeds the same inputs to these packages and to the Python reference (`reference/python`) and compares outcomes, reason codes and the whole public state. Most inputs are entries, envelopes and grants built and signed with the vectors' keys, so that they reach the rules behind the signature checks; accepted entries become states for later inputs. `KINFOLD_DIFF_N` and `KINFOLD_DIFF_SEED` set its size and seed.
 
