@@ -4,6 +4,10 @@
 //
 //	kinfold serve --url https://kinfold.example.org [--listen 127.0.0.1:8080] [--data DIR]
 //	              [--tls-cert FILE --tls-key FILE] [--no-clock-check]
+//
+// serve keeps everything in DIR: the server key (server.key), the database (kinfold.db, with
+// its -wal and -shm files) and the admin socket (admin.sock).
+//
 //	kinfold setup [--expires 24h]                 print a setup code for the first phone
 //	kinfold token create [--expires 168h]         a registration token
 //	kinfold token list | token revoke ID
@@ -39,7 +43,8 @@ import (
 	"github.com/gureetk/kinfold/server/internal/admin"
 	"github.com/gureetk/kinfold/server/internal/api"
 	"github.com/gureetk/kinfold/server/internal/clock"
-	"github.com/gureetk/kinfold/server/internal/store/memstore"
+	"github.com/gureetk/kinfold/server/internal/store"
+	"github.com/gureetk/kinfold/server/internal/store/sqlstore"
 	"github.com/gureetk/kinfold/server/internal/wire"
 )
 
@@ -75,11 +80,12 @@ func serve(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	url := fs.String("url", "", "the server's base URL, https and no trailing slash (required)")
 	listen := fs.String("listen", "127.0.0.1:8080", "address to listen on")
-	data := fs.String("data", defaultData, "data directory: server key and admin socket")
+	data := fs.String("data", defaultData, "data directory: server key, database and admin socket")
 	certFile := fs.String("tls-cert", "", "TLS certificate; without it, serve plain HTTP behind a TLS proxy")
 	keyFile := fs.String("tls-key", "", "TLS private key")
 	noClock := fs.Bool("no-clock-check", false, "don't ask the kernel whether the clock is synchronized")
 	fs.Parse(args)
+	privateFiles()
 	if !strings.HasPrefix(*url, "https://") || strings.HasSuffix(*url, "/") {
 		return errors.New("--url must be an https URL without a trailing slash")
 	}
@@ -90,11 +96,15 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
-	st := memstore.New()
+	st, err := sqlstore.Open(filepath.Join(*data, "kinfold.db"))
+	if err != nil {
+		return err
+	}
+	defer st.Close()
 	clk := clock.System{CheckSync: !*noClock}
-	slog.Warn("this build keeps everything in memory: accounts, circles and envelopes are lost when it stops")
+	handler := api.New(api.Config{URL: *url, Key: key, Clock: clk, Store: st})
 
-	srv := &http.Server{Addr: *listen, Handler: api.New(api.Config{URL: *url, Key: key, Clock: clk, Store: st}),
+	srv := &http.Server{Addr: *listen, Handler: handler,
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second,
 		IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 16 << 10,
 		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13}}
@@ -120,6 +130,7 @@ func serve(args []string) error {
 		}
 	}()
 	slog.Info("serving", "url", *url, "listen", *listen, "admin", sock)
+	go janitor(handler)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
@@ -135,6 +146,21 @@ func serve(args []string) error {
 		err = nil
 	}
 	return err
+}
+
+// janitor sweeps away what has run out (API.md §15): at start, then every hour. It logs
+// counts, never what it deleted.
+func janitor(s *api.Server) {
+	for {
+		if n, err := s.Sweep(); err != nil {
+			slog.Error("sweep failed", "err", err)
+		} else if n != (store.Swept{}) {
+			slog.Info("swept", "envelopes", n.Envelopes, "replay_records", n.Seen, "sessions", n.Sessions,
+				"challenges", n.Challenges, "tokens", n.Tokens, "invites", n.Invites, "removals", n.Removals,
+				"circles", n.Circles)
+		}
+		time.Sleep(time.Hour)
+	}
 }
 
 // loadKey reads the server key's seed, making one on first start. It never leaves this file.

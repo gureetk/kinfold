@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -22,7 +24,9 @@ import (
 	"github.com/gureetk/kinfold/server/internal/identity"
 	"github.com/gureetk/kinfold/server/internal/kcrypto"
 	"github.com/gureetk/kinfold/server/internal/memberlog"
+	"github.com/gureetk/kinfold/server/internal/store"
 	"github.com/gureetk/kinfold/server/internal/store/memstore"
+	"github.com/gureetk/kinfold/server/internal/store/sqlstore"
 	tv "github.com/gureetk/kinfold/server/internal/testvec"
 	"github.com/gureetk/kinfold/server/internal/wire"
 )
@@ -37,11 +41,25 @@ type env struct {
 	adm http.Handler
 }
 
+// newStore returns the store a test runs on: SQLite in a temporary directory, as the server
+// uses, or memory when KINFOLD_STORE=memory.
+func newStore(t *testing.T) store.Store {
+	if os.Getenv("KINFOLD_STORE") == "memory" {
+		return memstore.New()
+	}
+	st, err := sqlstore.Open(filepath.Join(t.TempDir(), "kinfold.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	return st
+}
+
 func newEnv(t *testing.T, limits api.Limits) *env {
 	seed := sha256.Sum256([]byte("kinfold api test server key"))
 	key := ed25519.NewKeyFromSeed(seed[:])
 	clk := clock.NewFake(1_793_635_200_000)
-	st := memstore.New()
+	st := newStore(t)
 	e := &env{t: t, clk: clk, srv: api.New(api.Config{URL: url, Key: key, Clock: clk, Store: st, Limits: limits}),
 		adm: (&admin.Admin{Store: st, Clock: clk, Key: key, URL: url}).Handler()}
 	e.admin("PATCH", "/settings", `{"member_tokens": true, "web_devices": true}`)
@@ -705,6 +723,34 @@ func TestRefusalsCount(t *testing.T) {
 		e.clk.Advance(60_000)
 		expect(t, e.octets("POST", path, first, tok), http.StatusCreated, "")
 	})
+}
+
+// The hourly sweep deletes what has run out with the retention of API.md §15, and a closed
+// circle 30 days after its last member left, with everything that names it.
+func TestSweep(t *testing.T) {
+	e := newEnv(t, generous)
+	devs := devices(t)
+	e.register(devs)
+	cid := e.replayMainLog(devs, 13)
+	for _, raw := range logCase(t, "accepted_last_member_leaves") { // the last one closes the circle
+		e.clk.Set(createdAt(raw))
+		expect(t, e.octets("POST", "/v1/circles/"+b64(cid)+"/log", raw, e.login(devs[string(raw[68:84])])), http.StatusCreated, "")
+	}
+	if n, err := e.srv.Sweep(); err != nil || n.Circles != 0 {
+		t.Fatalf("swept %+v %v as the circle closed", n, err)
+	}
+	e.clk.Advance(api.ClosedKeep - 1)
+	if n, err := e.srv.Sweep(); err != nil || n.Circles != 0 || n.Sessions == 0 {
+		t.Fatalf("swept %+v %v a moment before the circle's time", n, err)
+	}
+	e.clk.Advance(1)
+	n, err := e.srv.Sweep()
+	if err != nil || n.Circles != 1 || n.Removals == 0 {
+		t.Fatalf("swept %+v %v", n, err)
+	}
+	if n, _ := e.srv.Sweep(); n != (store.Swept{}) {
+		t.Errorf("a second sweep found %+v", n)
+	}
 }
 
 // Registration refuses what the log would refuse, and a token works once.

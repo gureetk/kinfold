@@ -23,7 +23,7 @@ import (
 	"github.com/gureetk/kinfold/server/internal/api"
 	"github.com/gureetk/kinfold/server/internal/clock"
 	"github.com/gureetk/kinfold/server/internal/store"
-	"github.com/gureetk/kinfold/server/internal/store/memstore"
+	"github.com/gureetk/kinfold/server/internal/store/sqlstore"
 	tv "github.com/gureetk/kinfold/server/internal/testvec"
 )
 
@@ -42,7 +42,11 @@ func TestTwoReferenceClients(t *testing.T) {
 	// The server's clock is injected and stands still: clients take their time from the
 	// Kinfold-Time header, as phones do.
 	clk := clock.NewFake(1_794_571_200_000) // 2026-11-13T12:00:00Z
-	st := memstore.New()
+	st, err := sqlstore.Open(filepath.Join(t.TempDir(), "kinfold.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
 	seed := sha256.Sum256([]byte("kinfold e2e server key"))
 	key := ed25519.NewKeyFromSeed(seed[:])
 

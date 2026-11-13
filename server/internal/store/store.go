@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package store is what the server keeps (API.md §15), behind an interface: an in-memory
-// implementation for now (memstore), SQLite later. All access goes through transactions,
-// so that a check and the write it guards are atomic.
+// Package store is what the server keeps (API.md §15), behind an interface with two
+// implementations: SQLite (sqlstore) for the server, and memory (memstore) for tests. All
+// access goes through transactions, so that a check and the write it guards are atomic.
+// The storetest package holds the tests both must pass.
 package store
 
 import (
@@ -108,7 +109,8 @@ type SeenRecord struct {
 	KeepUntil  uint64 // 32 days after sent_at (API.md §15)
 }
 
-// Invite is an invite's mailbox (API.md §9).
+// Invite is an invite's mailbox (API.md §9). A sweep deletes it once it can no longer
+// matter: after expires_at, and after the retention of its result if one was written.
 type Invite struct {
 	ID        []byte
 	Circle    []byte
@@ -153,8 +155,9 @@ type Tx interface {
 	// CreateCircle stores a circle and its GENESIS entry.
 	CreateCircle(c Circle, genesis []byte) error
 	Circle(id []byte) (Circle, error)
-	// AppendEntry stores raw as entry s.Seq and s as the circle's state.
-	AppendEntry(circle, raw []byte, s *memberlog.State) error
+	// AppendEntry stores raw as entry s.Seq, appended at the server's time at, and s as the
+	// circle's state. A circle whose state has no members is closed from then on.
+	AppendEntry(circle, raw []byte, s *memberlog.State, at uint64) error
 	// Entries returns entries after seq `after`, in order, at most limit of them and no
 	// more than maxBytes in all (but at least one).
 	Entries(circle []byte, after int64, limit, maxBytes int) ([][]byte, error)
@@ -169,7 +172,7 @@ type Tx interface {
 	PutEnvelope(Envelope) (uint64, error)
 	// Inbox returns, in order of arrival, envelopes after Seq `after` addressed to device
 	// in one of the circles, unexpired at now: at most limit, no more than maxBytes (but at
-	// least one), and whether more wait.
+	// least one), and whether more wait. Their Recipients may be left out.
 	Inbox(device []byte, circles [][]byte, after uint64, limit, maxBytes int, now uint64) ([]Envelope, bool, error)
 	// Seen is the replay record of a circle (§7.5).
 	Seen(circle, sender []byte, seq uint64) (SeenRecord, bool, error)
@@ -178,4 +181,20 @@ type Tx interface {
 	PutInvite(Invite) error
 	Invite(id []byte) (Invite, error)
 	InvitesOf(circle []byte) ([]Invite, error)
+
+	// Sweep deletes what has run out by now (API.md §15) and counts what it deleted.
+	Sweep(now uint64, r Retention) (Swept, error)
+}
+
+// Retention is how long the server keeps what has ended, in milliseconds. Everything else
+// goes when it expires: challenges, sessions, tokens, envelopes and replay records.
+type Retention struct {
+	Removals      uint64 // a removed device may read the log for this long (API.md §6)
+	Results       uint64 // a join result, after it is written (§9)
+	ClosedCircles uint64 // a closed circle, after its last member leaves (§6)
+}
+
+// Swept counts what a sweep deleted.
+type Swept struct {
+	Challenges, Sessions, Tokens, Envelopes, Seen, Removals, Invites, Circles int
 }

@@ -43,6 +43,7 @@ const (
 	InviteMaxLife   = 7 * day
 	ResultKeep      = 24 * hour
 	RemovedReadLife = 30 * day
+	ClosedKeep      = 30 * day // a closed circle, after its last member leaves
 	RepairMaxLife   = 72 * hour
 	SeenKeep        = 32 * day
 	MaxWaitSeconds  = 25
@@ -98,6 +99,19 @@ func New(cfg Config) *Server {
 
 // ServerKey is the server's public key.
 func (s *Server) ServerKey() ed25519.PublicKey { return s.cfg.Key.Public().(ed25519.PublicKey) }
+
+// Retention is how long the server keeps what has ended (API.md §15).
+var Retention = store.Retention{Removals: RemovedReadLife, Results: ResultKeep, ClosedCircles: ClosedKeep}
+
+// Sweep deletes what has run out (API.md §15). The server runs it every hour.
+func (s *Server) Sweep() (store.Swept, error) {
+	var n store.Swept
+	err := s.cfg.Store.Update(func(tx store.Tx) (err error) {
+		n, err = tx.Sweep(s.cfg.Clock.Now(), Retention)
+		return err
+	})
+	return n, err
+}
 
 func (s *Server) routes() {
 	h := func(pattern string, fn func(*request) error) {
