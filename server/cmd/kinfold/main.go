@@ -5,9 +5,10 @@
 //	kinfold serve --url https://kinfold.example.org [--listen 127.0.0.1:8080] [--data DIR]
 //	              [--tls-cert FILE --tls-key FILE] [--no-clock-check]
 //	              [--relay https://relay.example] [--push-hosts HOST,…] [--push-hosts-only]
+//	              [--no-webpush]
 //
-// serve keeps everything in DIR: the server key (server.key), the database (kinfold.db, with
-// its -wal and -shm files) and the admin socket (admin.sock).
+// serve keeps everything in DIR: the server key (server.key), the Web Push key (vapid.key),
+// the database (kinfold.db, with its -wal and -shm files) and the admin socket (admin.sock).
 //
 //	kinfold setup [--expires 24h]                 print a setup code for the first phone
 //	kinfold token create [--expires 168h]         a registration token
@@ -23,7 +24,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
@@ -88,6 +91,7 @@ func serve(args []string) error {
 	relay := fs.String("relay", "", "the iOS relay's base URL (API.md §14); without it, iPhones from the App Store get no pushes")
 	pushHosts := fs.String("push-hosts", "", "Web Push hosts allowed without the public-address check, comma-separated")
 	pushHostsOnly := fs.Bool("push-hosts-only", false, "send Web Push only to the hosts in --push-hosts")
+	noWebPush := fs.Bool("no-webpush", false, "take no Web Push (UnifiedPush) registrations; Android phones then rely on their stream")
 	fs.Parse(args)
 	privateFiles()
 	if !strings.HasPrefix(*url, "https://") || strings.HasSuffix(*url, "/") {
@@ -109,6 +113,12 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
+	var vapid *ecdsa.PrivateKey
+	if !*noWebPush {
+		if vapid, err = loadVAPID(filepath.Join(*data, "vapid.key")); err != nil {
+			return err
+		}
+	}
 	st, err := sqlstore.Open(filepath.Join(*data, "kinfold.db"))
 	if err != nil {
 		return err
@@ -116,7 +126,7 @@ func serve(args []string) error {
 	defer st.Close()
 	clk := clock.System{CheckSync: !*noClock}
 	handler := api.New(api.Config{URL: *url, Key: key, Clock: clk, Store: st,
-		Push: api.PushConfig{Relay: *relay, Hosts: hosts, HostsOnly: *pushHostsOnly}})
+		Push: api.PushConfig{Relay: *relay, Hosts: hosts, HostsOnly: *pushHostsOnly, VAPID: vapid}})
 
 	srv := &http.Server{Addr: *listen, Handler: handler,
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second,
@@ -202,6 +212,31 @@ func loadKey(path string) (ed25519.PrivateKey, error) {
 		return nil, fmt.Errorf("%s is not a server key", path)
 	}
 	return ed25519.NewKeyFromSeed(seed), nil
+}
+
+// loadVAPID reads the server's Web Push key (RFC 8292), making one on first start. Phones
+// hand its public half to their distributors, so it stays as long as this file does.
+func loadVAPID(path string) (*ecdsa.PrivateKey, error) {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return nil, err
+		}
+		if raw, err = k.Bytes(); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(path, raw, 0o600); err != nil {
+			return nil, err
+		}
+	} else if err != nil {
+		return nil, err
+	}
+	k, err := ecdsa.ParseRawPrivateKey(elliptic.P256(), raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s is not a VAPID key", path)
+	}
+	return k, nil
 }
 
 // ---- the operator's commands ----

@@ -1,6 +1,6 @@
 # Kinfold HTTP API, version 0
 
-**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §12 and the part of §16 that a first device needs, with these gaps: it doesn't send Web Push messages yet, and takes no `apns` registrations; `stream_post` isn't offered; the viewer page shows a position as text until the map of §13 is in.
+**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §12 and the part of §16 that a first device needs, with these gaps: it takes no `apns` registrations; `stream_post` isn't offered; the viewer page shows a position as text until the map of §13 is in.
 **License:** [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 Section numbers written "spec §…" point into PROTOCOL.md. Where the two documents disagree about bytes, the spec wins.
@@ -144,7 +144,7 @@ Default rate limits. The operator can change them; clients MUST handle 429 at an
 - `server_info` is the only signed part. A client checks it against the server key it trusts before believing anything else (spec §13.1).
 - `features` lists what the operator has switched on. `web_devices` means direction-2 linking is available (§10); `member_tokens` means admins can mint registration tokens with invites (§9); `apns` may appear on a server that holds its own Apple key (§12).
 - `relay` is the iOS relay this server sends through. An app whose built-in relay differs warns the person that pushes won't arrive.
-- `vapid_key` is present with `webpush`. The app hands it to its UnifiedPush distributor.
+- `vapid_key` is present with `webpush`. The app hands it to its UnifiedPush distributor. It lasts as long as the server's data; an app that sees a different one subscribes again with it and sends the new registration (§12).
 - `move` is present while a move is announced (spec §13.3), at the old address and the new one, for at least 90 days.
 
 ---
@@ -379,11 +379,11 @@ A device with an open stream needs no push. Android phones keep a stream by defa
 ```
 
 - **`relay`** is the App Store build's route. The capabilities come from the relay (§14), as base64url. `locate` is present when the app has Apple's location-push entitlement and the person has allowed location all the time. A server with no relay configured refuses it (403).
-- **`webpush`** is UnifiedPush. The server sends the sealed push as a Web Push message (RFC 8030), encrypted to `p256dh` and `auth` (RFC 8291) and signed with its VAPID key (RFC 8292).
+- **`webpush`** is UnifiedPush. The server sends the sealed push as a Web Push message (RFC 8030) of one record, encrypted to `p256dh` and `auth` (RFC 8291) and signed with its VAPID key (RFC 8292). The VAPID token's audience is the endpoint's origin, it expires within 12 hours, and its subject is the server's URL, so the push host learns that URL. A server without a VAPID key refuses it (403).
 - **`apns`** exists only on a server that holds its own Apple key, for families who build the iOS app themselves; any other server refuses it (403).
 - **Who.** Any receiving device (403 for a recovery device). A registration that breaks a rule here, or the rules for push addresses below, is 400.
 
-**What is sent.** Always the sealed, signed, fixed-size push of spec §14.2, and nothing else, sealed to the newest current key bundle the server knows for the device: the one it registered with, or a later one in a circle's log. A device with a stream open gets no push. For an envelope uploaded with `Kinfold-Wake`, the server sends a `records` push when the delivery record fits in one, otherwise a `wake` push, and the device fetches its inbox. An upload whose wake-up is past its limit (§3) is refused whole, with 429, and nothing is stored. Every Web Push request uses the same `TTL` (3,600) and `Urgency` (`high`), so a distributor can't tell an alert from a wake-up.
+**What is sent.** Always the sealed, signed, fixed-size push of spec §14.2, and nothing else, sealed to the newest current key bundle the server knows for the device: the one it registered with, or a later one in a circle's log. A device with a stream open gets no push, and neither does one registered for a route the operator has since switched off; the discovery document (§4) shows which routes are on. For an envelope uploaded with `Kinfold-Wake`, the server sends a `records` push when the delivery record fits in one, otherwise a `wake` push, and the device fetches its inbox. An upload whose wake-up is past its limit (§3) is refused whole, with 429, and nothing is stored. Every Web Push request uses the same `TTL` (3,600) and `Urgency` (`high`), so a distributor can't tell an alert from a wake-up.
 
 **Delivery types.** Apple needs to be told how to deliver a push, so the server names one of three:
 

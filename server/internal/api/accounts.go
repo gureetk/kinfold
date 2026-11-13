@@ -30,15 +30,27 @@ func (s *Server) discovery(q *request) error {
 		return err
 	}
 	features := []string{}
+	out := map[string]any{
+		"server_info": b64(s.serverInfo(q.now)),
+		"api":         map[string]int{"min": APIMin, "max": APIMax},
+		"repair":      repairing(st, q.now),
+	}
+	if st.WebDevices {
+		features = append(features, "web_devices")
+	}
 	if st.MemberTokens {
 		features = append(features, "member_tokens")
 	}
-	writeJSON(q.w, http.StatusOK, map[string]any{
-		"server_info": b64(s.serverInfo(q.now)),
-		"api":         map[string]int{"min": APIMin, "max": APIMax},
-		"features":    features,
-		"repair":      repairing(st, q.now),
-	})
+	if s.cfg.Push.Relay != "" {
+		features = append(features, "relay")
+		out["relay"] = s.cfg.Push.Relay
+	}
+	if k := s.vapidKey(); k != "" {
+		features = append(features, "webpush")
+		out["vapid_key"] = k
+	}
+	out["features"] = features
+	writeJSON(q.w, http.StatusOK, out)
 	return nil
 }
 

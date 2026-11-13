@@ -86,6 +86,7 @@ type Server struct {
 	streams *streams
 	links   *mailboxes
 	sending chan struct{} // pushes in flight
+	webPush *http.Client
 	start   uint64
 
 	infoMu sync.Mutex
@@ -102,6 +103,7 @@ func New(cfg Config) *Server {
 	cfg.Push = cfg.Push.withDefaults()
 	s := &Server{cfg: cfg, mux: http.NewServeMux(), limiter: newLimiter(cfg.Limits.withDefaults()), waits: newHub(),
 		streams: newStreams(), links: newMailboxes(), sending: make(chan struct{}, maxSending), start: cfg.Clock.Now()}
+	s.webPush = s.webPushClient()
 	s.routes()
 	return s
 }

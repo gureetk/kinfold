@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,9 +38,14 @@ type PushConfig struct {
 	// a distributor on the home network. HostsOnly refuses every other host.
 	Hosts     []string
 	HostsOnly bool
-	// Client talks to the relay; Resolve looks up push hosts. Tests replace them.
+	// VAPID is the server's key for Web Push (RFC 8292); without one, Web Push
+	// registrations are refused.
+	VAPID *ecdsa.PrivateKey
+	// Client talks to the relay; Resolve looks up push hosts; RootCAs, if set, are the
+	// only roots Web Push hosts' certificates may chain to. Tests replace them.
 	Client  *http.Client
 	Resolve func(ctx context.Context, host string) ([]netip.Addr, error)
+	RootCAs *x509.CertPool
 }
 
 const (
@@ -92,6 +99,9 @@ func (s *Server) putPush(q *request) error {
 		}
 		reg.Notify, reg.Locate = in.Notify, nilIfEmpty(in.Locate)
 	case "webpush":
+		if s.cfg.Push.VAPID == nil {
+			return &apiError{status: http.StatusForbidden, code: "forbidden", msg: "this server has no Web Push key"}
+		}
 		if err := s.checkPushURL(q.r.Context(), in.Endpoint); err != nil {
 			return badRequest(err.Error())
 		}
@@ -146,12 +156,18 @@ func (s *Server) checkPushURL(ctx context.Context, raw string) error {
 	return err
 }
 
+// An addrError is a push address the rules refuse. Its text names no host or address, so it
+// may be logged.
+type addrError string
+
+func (e addrError) Error() string { return string(e) }
+
 // pushAddrs resolves a push host to the addresses the server may connect to: all of them
 // for a host on the operator's list, otherwise only if every one is public.
 func (s *Server) pushAddrs(ctx context.Context, host string) ([]netip.Addr, error) {
 	allowed := slices.ContainsFunc(s.cfg.Push.Hosts, func(h string) bool { return strings.EqualFold(h, host) })
 	if !allowed && s.cfg.Push.HostsOnly {
-		return nil, errors.New("this server sends pushes only to the hosts its operator lists")
+		return nil, addrError("this server sends pushes only to the hosts its operator lists")
 	}
 	var addrs []netip.Addr
 	if a, err := netip.ParseAddr(host); err == nil {
@@ -160,13 +176,13 @@ func (s *Server) pushAddrs(ctx context.Context, host string) ([]netip.Addr, erro
 		rctx, cancel := context.WithTimeout(ctx, pushTimeout)
 		defer cancel()
 		if addrs, err = s.cfg.Push.Resolve(rctx, host); err != nil || len(addrs) == 0 {
-			return nil, errors.New("the push host doesn't resolve")
+			return nil, addrError("the push host doesn't resolve")
 		}
 	}
 	if allowed || !slices.ContainsFunc(addrs, func(a netip.Addr) bool { return !publicAddr(a) }) {
 		return addrs, nil
 	}
-	return nil, errors.New("the push host resolves to an address that isn't public")
+	return nil, addrError("the push host resolves to an address that isn't public")
 }
 
 var cgnat = netip.MustParsePrefix("100.64.0.0/10")
@@ -206,6 +222,9 @@ func (s *Server) preparePush(tx store.Tx, device []byte, ptype uint8, body []byt
 		return nil, nil
 	} else if err != nil {
 		return nil, err
+	}
+	if (reg.Kind == "relay" && s.cfg.Push.Relay == "") || (reg.Kind == "webpush" && s.cfg.Push.VAPID == nil) {
+		return nil, nil // the operator has switched that route off since
 	}
 	dev, err := tx.Device(device)
 	if errors.Is(err, store.ErrNotFound) {
@@ -300,7 +319,7 @@ func (s *Server) deliver(j *pushJob) {
 	case "relay":
 		err = s.sendRelay(ctx, j)
 	case "webpush":
-		err = errors.New("web push isn't sent yet")
+		err = s.sendWebPush(ctx, j)
 	}
 	switch {
 	case errors.Is(err, errDeadPush):
