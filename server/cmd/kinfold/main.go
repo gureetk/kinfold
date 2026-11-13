@@ -17,6 +17,9 @@
 //	kinfold settings [--member-tokens on|off] [--web-devices on|off]
 //	kinfold operator add|remove ACCOUNT_ID
 //	kinfold repair start [--hours 72] | repair end
+//	kinfold accounts | circles                    what the server knows of them: IDs, kinds, counts, days
+//	kinfold account nickname ID NAME | account remove ID
+//	kinfold device nickname ID NAME | device remove ID
 //	kinfold region add ID FILE [--name NAME]      offer a PMTiles region for download
 //	kinfold region list | region remove ID
 //	kinfold coarse set FILE | coarse remove       the share viewer's map, zoom 13 at most
@@ -68,7 +71,7 @@ func main() {
 	switch cmd, args := os.Args[1], os.Args[2:]; cmd {
 	case "serve":
 		err = serve(args)
-	case "setup", "token", "settings", "operator", "repair", "region", "coarse":
+	case "setup", "token", "settings", "operator", "repair", "region", "coarse", "accounts", "circles", "account", "device":
 		err = adminCommand(cmd, args)
 	default:
 		usage()
@@ -80,7 +83,8 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: kinfold serve|setup|token|settings|operator|repair|region|coarse [flags]; see the package documentation")
+	fmt.Fprintln(os.Stderr, "usage: kinfold serve|setup|token|settings|operator|repair|accounts|circles|account|device|region|coarse [flags];"+
+		" see the package documentation")
 	os.Exit(2)
 }
 
@@ -148,7 +152,7 @@ func serve(args []string) error {
 		IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 16 << 10,
 		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13}}
 	adminSrv := &http.Server{Handler: (&admin.Admin{Store: st, Clock: clk, Key: key, URL: *url, Notify: handler.Notice,
-		Tiles: maps}).Handler(), ReadHeaderTimeout: 10 * time.Second}
+		Tiles: maps, Remove: handler}).Handler(), ReadHeaderTimeout: 10 * time.Second}
 
 	sock := filepath.Join(*data, "admin.sock")
 	os.Remove(sock)
@@ -368,6 +372,43 @@ func adminCommand(cmd string, args []string) error {
 	case cmd == "repair" && len(sub) == 1 && sub[0] == "end":
 		_, _, err := call("DELETE", "/repair", nil)
 		return err
+	case cmd == "accounts" && len(sub) == 0:
+		_, list, err := call("GET", "/accounts", nil)
+		if err != nil {
+			return err
+		}
+		for _, a := range list {
+			op := ""
+			if a["operator"] == true {
+				op = "  operator"
+			}
+			fmt.Printf("%v  %q  %v circles  since %v%s\n", a["account_id"], a["nickname"], a["circles"], a["created_day"], op)
+			devices, _ := a["devices"].([]any)
+			for _, d := range devices {
+				m, _ := d.(map[string]any)
+				kind, _ := m["kind"].(float64)
+				fmt.Printf("    %v  %-14s %q  last seen %v\n", m["device_id"], kindNames[int(kind)], m["nickname"], m["last_seen_day"])
+			}
+		}
+	case cmd == "circles" && len(sub) == 0:
+		_, list, err := call("GET", "/circles", nil)
+		if err != nil {
+			return err
+		}
+		for _, c := range list {
+			closed := ""
+			if c["closed"] == true {
+				closed = "  closed"
+			}
+			fmt.Printf("%v  %v members, %v devices, %v log entries, since %v%s\n", c["circle_id"], c["members"], c["devices"],
+				c["entries"], c["created_day"], closed)
+		}
+	case (cmd == "account" || cmd == "device") && len(sub) == 3 && sub[0] == "nickname":
+		_, _, err := call("PATCH", "/"+cmd+"s/"+neturl.PathEscape(sub[1]), map[string]any{"nickname": sub[2]})
+		return err
+	case (cmd == "account" || cmd == "device") && len(sub) == 2 && sub[0] == "remove":
+		_, _, err := call("DELETE", "/"+cmd+"s/"+neturl.PathEscape(sub[1]), nil)
+		return err
 	case cmd == "region" && len(sub) == 1 && sub[0] == "list":
 		out, _, err := call("GET", "/regions", nil)
 		if err != nil {
@@ -407,6 +448,8 @@ func adminCommand(cmd string, args []string) error {
 	}
 	return nil
 }
+
+var kindNames = map[int]string{1: "phone", 2: "tablet", 3: "web", 4: "home assistant", 5: "recovery kit"}
 
 // printMap prints a region or the coarse archive as the admin socket describes it.
 func printMap(v any) {

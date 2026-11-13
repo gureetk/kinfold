@@ -517,6 +517,11 @@ The web console adds its own protections, since a console on `localhost` is a kn
 | `GET /settings`, `PATCH /settings` | `kinfold settings [--member-tokens on\|off] [--web-devices on\|off]` | `member_tokens` and `web_devices` |
 | `POST /repair`, `DELETE /repair` | `kinfold repair start [--hours 72]\|end` | Repair mode (§6), at most 72 hours |
 | `PUT /operators/{account_id}`, `DELETE …` | `kinfold operator add\|remove ACCOUNT_ID` | Who may read `/v1/server/status` |
+| `GET /accounts` | `kinfold accounts` | Every account with its devices: IDs, device kinds, the day each was made and was last seen (never a time of day), how many circles the account is in, operators, and nicknames |
+| `PATCH /accounts/{id}`, `PATCH /devices/{id}` | `kinfold account\|device nickname ID NAME` | `{"nickname"}`: a label of at most 64 bytes that only the operator sees; `""` clears it |
+| `DELETE /devices/{id}` | `kinfold device remove ID` | Cuts a device off: its sessions, push registration and stream end at once. Circles' logs still name it until a member removes it there |
+| `DELETE /accounts/{id}` | `kinfold account remove ID` | Deletes an account in no circle, with its devices; 409 while it is in one |
+| `GET /circles` | `kinfold circles` | Every circle, closed ones too: its ID, how many members and devices it has, the length of its log and the day it was made |
 | `GET /regions`, `PUT /regions/{id}`, `DELETE /regions/{id}` | `kinfold region list\|add ID FILE [--name NAME]\|remove ID` | Map regions (§13). `PUT` takes `{"file", "name"}`: the server copies the file in, checks that it is a PMTiles version 3 archive, and keeps it under its SHA-256, so a file never changes under a download |
 | `PUT /coarse`, `DELETE /coarse` | `kinfold coarse set FILE\|remove` | The coarse archive (§13), refused if it goes past zoom 13 |
 

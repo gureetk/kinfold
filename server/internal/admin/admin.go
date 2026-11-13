@@ -3,7 +3,8 @@
 // Package admin is the operator's API (API.md §16): JSON over HTTP on a Unix socket that
 // file permissions protect, never on the network. It handles nothing encrypted and shows
 // no location, name or role. So far it covers what a first device needs: setup codes and
-// registration tokens, plus the settings, operators, repair mode and the map files.
+// registration tokens, plus the settings, operators, repair mode, the map files, and the
+// accounts, devices and circles as far as the server knows them.
 package admin
 
 import (
@@ -18,7 +19,10 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
+	"unicode/utf8"
 
+	"github.com/gureetk/kinfold/server/internal/api"
 	"github.com/gureetk/kinfold/server/internal/clock"
 	"github.com/gureetk/kinfold/server/internal/identity"
 	"github.com/gureetk/kinfold/server/internal/store"
@@ -46,6 +50,15 @@ type Admin struct {
 	Notify func(code string)
 	// Tiles are the map files on offer (API.md §13); nil on a server that keeps none.
 	Tiles *tiles.Library
+	// Remove removes devices and accounts through the API server, so that their sessions,
+	// push registrations and streams end at once. Without it, the admin can't remove them.
+	Remove Remover
+}
+
+// Remover is the API server's side of removing a device or an account (api.Server).
+type Remover interface {
+	RemoveDevice(id []byte) error
+	RemoveAccount(id []byte) error
 }
 
 // Handler returns the HTTP handler to serve on the admin socket.
@@ -64,6 +77,12 @@ func (a *Admin) Handler() http.Handler {
 	m.HandleFunc("DELETE /repair", a.wrap(a.endRepair))
 	m.HandleFunc("PUT /operators/{account_id}", a.wrap(a.setOperator(true)))
 	m.HandleFunc("DELETE /operators/{account_id}", a.wrap(a.setOperator(false)))
+	m.HandleFunc("GET /accounts", a.wrap(a.listAccounts))
+	m.HandleFunc("PATCH /accounts/{id}", a.wrap(a.nameAccount))
+	m.HandleFunc("DELETE /accounts/{id}", a.wrap(a.removeAccount))
+	m.HandleFunc("PATCH /devices/{id}", a.wrap(a.nameDevice))
+	m.HandleFunc("DELETE /devices/{id}", a.wrap(a.removeDevice))
+	m.HandleFunc("GET /circles", a.wrap(a.listCircles))
 	m.HandleFunc("GET /regions", a.wrap(a.listRegions))
 	m.HandleFunc("PUT /regions/{id}", a.wrap(a.putRegion))
 	m.HandleFunc("DELETE /regions/{id}", a.wrap(a.deleteRegion))
@@ -283,9 +302,9 @@ func (a *Admin) endRepair(*http.Request) (int, any, error) {
 // /v1/server/status.
 func (a *Admin) setOperator(on bool) func(*http.Request) (int, any, error) {
 	return func(r *http.Request) (int, any, error) {
-		id, err := wire.DecodeB64u(strings.TrimSpace(r.PathValue("account_id")))
-		if err != nil || len(id) != 16 {
-			return 0, nil, &httpError{http.StatusBadRequest, "account IDs are 22 characters of base64url"}
+		id, err := pathID(r, "account_id", "account")
+		if err != nil {
+			return 0, nil, err
 		}
 		err = a.Store.Update(func(tx store.Tx) error {
 			acc, err := tx.Account(id)
@@ -299,6 +318,169 @@ func (a *Admin) setOperator(on bool) func(*http.Request) (int, any, error) {
 		})
 		return http.StatusNoContent, nil, err
 	}
+}
+
+// ---- accounts, devices and circles ----
+//
+// The operator sees IDs, device kinds, counts and days, and the nicknames the operator gave:
+// never a time of day, a name, a role or anything encrypted.
+
+// day is the UTC day of a time in milliseconds, as YYYY-MM-DD.
+func day(ms uint64) string { return time.UnixMilli(int64(ms)).UTC().Format(time.DateOnly) }
+
+func pathID(r *http.Request, name, what string) ([]byte, error) {
+	id, err := wire.DecodeB64u(strings.TrimSpace(r.PathValue(name)))
+	if err != nil || len(id) != 16 {
+		return nil, &httpError{http.StatusBadRequest, what + " IDs are 22 characters of base64url"}
+	}
+	return id, nil
+}
+
+func (a *Admin) listAccounts(*http.Request) (int, any, error) {
+	out := []map[string]any{}
+	err := a.Store.View(func(tx store.Tx) error {
+		accs, err := tx.Accounts()
+		if err != nil {
+			return err
+		}
+		for _, acc := range accs {
+			devs, err := tx.DevicesOf(acc.ID)
+			if err != nil {
+				return err
+			}
+			circles, err := tx.CirclesOf(acc.ID)
+			if err != nil {
+				return err
+			}
+			ds := []map[string]any{}
+			for _, d := range devs {
+				ds = append(ds, map[string]any{"device_id": wire.EncodeB64u(d.ID), "kind": d.Kind, "created_day": day(d.CreatedAt),
+					"last_seen_day": day(d.LastSeenAt), "nickname": d.Nickname})
+			}
+			out = append(out, map[string]any{"account_id": wire.EncodeB64u(acc.ID), "created_day": day(acc.CreatedAt),
+				"operator": acc.Operator, "circles": len(circles), "nickname": acc.Nickname, "devices": ds})
+		}
+		return nil
+	})
+	return http.StatusOK, out, err
+}
+
+// nickname reads a nickname: at most 64 bytes of UTF-8 without control characters, or ""
+// to clear it.
+func nickname(r *http.Request) (string, error) {
+	var in struct {
+		Nickname *string `json:"nickname"`
+	}
+	if err := decode(r, &in); err != nil {
+		return "", err
+	}
+	if in.Nickname == nil || len(*in.Nickname) > 64 || !utf8.ValidString(*in.Nickname) ||
+		strings.ContainsFunc(*in.Nickname, func(c rune) bool { return c < 0x20 || c == 0x7F }) {
+		return "", &httpError{http.StatusBadRequest, "nickname is at most 64 bytes of text, or empty to clear it"}
+	}
+	return *in.Nickname, nil
+}
+
+func (a *Admin) nameAccount(r *http.Request) (int, any, error) {
+	id, err := pathID(r, "id", "account")
+	if err != nil {
+		return 0, nil, err
+	}
+	name, err := nickname(r)
+	if err != nil {
+		return 0, nil, err
+	}
+	err = a.Store.Update(func(tx store.Tx) error {
+		acc, err := tx.Account(id)
+		if errors.Is(err, store.ErrNotFound) {
+			return &httpError{http.StatusNotFound, "no such account"}
+		} else if err != nil {
+			return err
+		}
+		acc.Nickname = name
+		return tx.PutAccount(acc)
+	})
+	return http.StatusNoContent, nil, err
+}
+
+func (a *Admin) nameDevice(r *http.Request) (int, any, error) {
+	id, err := pathID(r, "id", "device")
+	if err != nil {
+		return 0, nil, err
+	}
+	name, err := nickname(r)
+	if err != nil {
+		return 0, nil, err
+	}
+	err = a.Store.Update(func(tx store.Tx) error {
+		d, err := tx.Device(id)
+		if errors.Is(err, store.ErrNotFound) {
+			return &httpError{http.StatusNotFound, "no such device"}
+		} else if err != nil {
+			return err
+		}
+		d.Nickname = name
+		return tx.PutDevice(d)
+	})
+	return http.StatusNoContent, nil, err
+}
+
+// removeDevice cuts a device off: its sessions, push registration and stream end at once.
+// The circles' logs still name it until a member removes it there.
+func (a *Admin) removeDevice(r *http.Request) (int, any, error) {
+	id, err := pathID(r, "id", "device")
+	if err != nil {
+		return 0, nil, err
+	}
+	if a.Remove == nil {
+		return 0, nil, &httpError{http.StatusServiceUnavailable, "this admin socket can't remove devices"}
+	}
+	if err := a.Remove.RemoveDevice(id); errors.Is(err, store.ErrNotFound) {
+		return 0, nil, &httpError{http.StatusNotFound, "no such device"}
+	} else if err != nil {
+		return 0, nil, err
+	}
+	return http.StatusNoContent, nil, nil
+}
+
+// removeAccount deletes an account that is in no circle, with its devices.
+func (a *Admin) removeAccount(r *http.Request) (int, any, error) {
+	id, err := pathID(r, "id", "account")
+	if err != nil {
+		return 0, nil, err
+	}
+	if a.Remove == nil {
+		return 0, nil, &httpError{http.StatusServiceUnavailable, "this admin socket can't remove accounts"}
+	}
+	switch err := a.Remove.RemoveAccount(id); {
+	case errors.Is(err, store.ErrNotFound):
+		return 0, nil, &httpError{http.StatusNotFound, "no such account"}
+	case errors.Is(err, api.ErrStillMember):
+		return 0, nil, &httpError{http.StatusConflict, "the account is still in a circle: remove its devices instead"}
+	case err != nil:
+		return 0, nil, err
+	}
+	return http.StatusNoContent, nil, nil
+}
+
+func (a *Admin) listCircles(*http.Request) (int, any, error) {
+	out := []map[string]any{}
+	err := a.Store.View(func(tx store.Tx) error {
+		cs, err := tx.Circles()
+		if err != nil {
+			return err
+		}
+		for _, c := range cs {
+			devices := 0
+			for _, m := range c.State.Members {
+				devices += len(m.Devices)
+			}
+			out = append(out, map[string]any{"circle_id": wire.EncodeB64u(c.ID), "members": len(c.State.Members), "devices": devices,
+				"entries": c.State.Seq + 1, "created_day": day(c.CreatedAt), "closed": len(c.State.Members) == 0})
+		}
+		return nil
+	})
+	return http.StatusOK, out, err
 }
 
 // ---- maps (API.md §13) ----

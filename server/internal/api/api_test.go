@@ -65,7 +65,7 @@ func newEnv(t *testing.T, limits api.Limits, opts ...func(*api.Config)) *env {
 		o(&cfg)
 	}
 	e := &env{t: t, clk: clk, srv: api.New(cfg)}
-	e.adm = (&admin.Admin{Store: st, Clock: clk, Key: key, URL: url, Notify: e.srv.Notice}).Handler()
+	e.adm = (&admin.Admin{Store: st, Clock: clk, Key: key, URL: url, Notify: e.srv.Notice, Remove: e.srv}).Handler()
 	t.Cleanup(func() { e.srv.CloseStreams(5 * time.Second) })
 	e.admin("PATCH", "/settings", `{"member_tokens": true, "web_devices": true}`)
 	return e
@@ -73,14 +73,19 @@ func newEnv(t *testing.T, limits api.Limits, opts ...func(*api.Config)) *env {
 
 func (e *env) admin(method, path, body string) map[string]any {
 	e.t.Helper()
-	rec := httptest.NewRecorder()
-	e.adm.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+	rec := e.adminCall(method, path, body)
 	if rec.Code >= 300 {
 		e.t.Fatalf("admin %s %s: %d %s", method, path, rec.Code, rec.Body)
 	}
 	var out map[string]any
 	json.Unmarshal(rec.Body.Bytes(), &out)
 	return out
+}
+
+func (e *env) adminCall(method, path, body string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	e.adm.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+	return rec
 }
 
 type call struct {

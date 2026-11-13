@@ -128,8 +128,9 @@ func records(t *testing.T, s store.Store) {
 		}
 		return nil
 	})
-	acc := store.Account{ID: id(1), IK: id(2), Chain: []byte("chain"), CreatedAt: 5}
-	rec := store.Device{ID: id(3), Account: id(1), Kind: 4, DSK: id(5), Cert: []byte("cert"), CreatedAt: 6, LastSeenAt: 7}
+	acc := store.Account{ID: id(1), IK: id(2), Chain: []byte("chain"), CreatedAt: 5, Nickname: "the Singhs"}
+	rec := store.Device{ID: id(3), Account: id(1), Kind: 4, DSK: id(5), Cert: []byte("cert"), CreatedAt: 6, LastSeenAt: 7,
+		Nickname: "kitchen display"}
 	phone := store.Device{ID: id(4), Account: id(1), Kind: 1, DSK: id(6), Cert: []byte("cert"), Bundle: []byte("bundle")}
 	update(t, s, func(tx store.Tx) error {
 		must(t, tx.PutSettings(store.Settings{MemberTokens: true, RepairUntil: 1 << 50}))
@@ -165,8 +166,11 @@ func records(t *testing.T, s store.Store) {
 		if a, err := tx.Account(id(1)); err != nil || !reflect.DeepEqual(a, acc) {
 			t.Errorf("account: %+v %v", a, err)
 		}
-		if a, _ := tx.Account(id(2)); !a.Operator || len(a.Chain) != 0 {
+		if a, _ := tx.Account(id(2)); !a.Operator || len(a.Chain) != 0 || a.Nickname != "" {
 			t.Errorf("operator: %+v", a)
+		}
+		if accs, err := tx.Accounts(); err != nil || len(accs) != 2 || !reflect.DeepEqual(accs[0], acc) || !bytes.Equal(accs[1].ID, id(2)) {
+			t.Errorf("accounts, by ID: %+v %v", accs, err)
 		}
 		devs, _ := tx.DevicesOf(id(1))
 		if len(devs) != 2 || !reflect.DeepEqual(devs[0], rec) || !reflect.DeepEqual(devs[1], phone) || devs[0].Bundle != nil {
@@ -205,6 +209,9 @@ func circles(t *testing.T, s store.Store) {
 	view(t, s, func(tx store.Tx) error {
 		if _, err := tx.Circle(cid); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("a missing circle: %v", err)
+		}
+		if cs, err := tx.Circles(); err != nil || len(cs) != 0 {
+			t.Errorf("circles in a new store: %d %v", len(cs), err)
 		}
 		if _, err := tx.Entries(cid, -1, 10, 1<<20); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("entries of a missing circle: %v", err)
@@ -273,6 +280,11 @@ func circles(t *testing.T, s store.Store) {
 		if cs, _ := tx.CirclesOf(id(1)); len(cs) != 0 {
 			t.Error("CirclesOf someone else")
 		}
+		if cs, err := tx.Circles(); err != nil || len(cs) != 1 || !bytes.Equal(cs[0].ID, cid) {
+			t.Errorf("every circle: %d %v", len(cs), err)
+		} else {
+			sameState(t, cs[0].State, sts[len(sts)-1])
+		}
 		return nil
 	})
 	rm := store.Removal{Circle: cid, Device: id(5), Seq: 7, At: 1007}
@@ -305,6 +317,9 @@ func closedCircle(t *testing.T, s store.Store) {
 			if cs, _ := tx.CirclesOf([]byte(acc)); len(cs) != 0 {
 				t.Error("a member who left still finds the circle")
 			}
+		}
+		if cs, err := tx.Circles(); err != nil || len(cs) != 1 || len(cs[0].State.Members) != 0 || cs[0].CreatedAt != c.CreatedAt {
+			t.Errorf("every circle, closed ones too: %+v %v", cs, err)
 		}
 		return nil
 	})

@@ -219,8 +219,11 @@ func TestUpgrade(t *testing.T) {
 	mustDo(t, err)
 	db, err := sql.Open("sqlite3", "file:"+path)
 	mustDo(t, err)
-	// A database at version 1, as the first release left it, with a token in it.
-	for _, q := range []string{string(v1), `PRAGMA user_version = 1`, `INSERT INTO tokens VALUES (x'01', 1, 9, 0, NULL)`} {
+	// A database at version 1, as the first release left it, with a token, an account and a
+	// device in it.
+	for _, q := range []string{string(v1), `PRAGMA user_version = 1`, `INSERT INTO tokens VALUES (x'01', 1, 9, 0, NULL)`,
+		`INSERT INTO accounts VALUES (x'02', x'03', NULL, 0, 4)`,
+		`INSERT INTO devices VALUES (x'05', x'02', 1, x'06', x'07', x'08', 9, 10)`} {
 		_, err = db.Exec(q)
 		mustDo(t, err)
 	}
@@ -229,6 +232,12 @@ func TestUpgrade(t *testing.T) {
 	mustDo(t, s.Update(func(tx store.Tx) error {
 		if _, err := tx.Token([]byte{1}); err != nil {
 			t.Error("the token is gone")
+		}
+		if a, err := tx.Account([]byte{2}); err != nil || a.CreatedAt != 4 || a.Nickname != "" {
+			t.Errorf("the account: %+v %v", a, err)
+		}
+		if d, err := tx.Device([]byte{5}); err != nil || d.LastSeenAt != 10 || d.Nickname != "" {
+			t.Errorf("the device: %+v %v", d, err)
 		}
 		return tx.PutWatch(store.Watch{Circle: []byte("c"), Device: []byte("d"), Watcher: []byte("w"), Grant: []byte("g")})
 	}))
