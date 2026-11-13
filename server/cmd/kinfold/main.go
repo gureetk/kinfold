@@ -130,7 +130,6 @@ func serve(args []string) error {
 		}
 	}()
 	slog.Info("serving", "url", *url, "listen", *listen, "admin", sock)
-	go janitor(handler)
 	go everyMinute(handler)
 
 	stop := make(chan os.Signal, 1)
@@ -150,29 +149,23 @@ func serve(args []string) error {
 	return err
 }
 
-// janitor sweeps away what has run out (API.md §15): at start, then every hour. It logs
-// counts, never what it deleted.
-func janitor(s *api.Server) {
+// everyMinute sweeps away what has run out (API.md §15), runs the silence check (§8) and
+// forgets link mailboxes that have ended (§10): at start, then every minute. It logs counts,
+// never what it deleted.
+func everyMinute(s *api.Server) {
 	for {
 		if n, err := s.Sweep(); err != nil {
 			slog.Error("sweep failed", "err", err)
 		} else if n != (store.Swept{}) {
 			slog.Info("swept", "envelopes", n.Envelopes, "replay_records", n.Seen, "sessions", n.Sessions,
 				"challenges", n.Challenges, "tokens", n.Tokens, "invites", n.Invites, "removals", n.Removals,
-				"circles", n.Circles)
+				"watches", n.Watches, "shares", n.Shares, "circles", n.Circles)
 		}
-		time.Sleep(time.Hour)
-	}
-}
-
-// everyMinute runs the silence check of API.md §8, and forgets link mailboxes that have
-// ended (§10), every minute.
-func everyMinute(s *api.Server) {
-	for range time.Tick(time.Minute) {
 		if err := s.CheckSilences(); err != nil {
 			slog.Error("silence check failed", "err", err)
 		}
 		s.SweepLinks()
+		time.Sleep(time.Minute)
 	}
 }
 

@@ -1,0 +1,26 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Shared location</title>
+<link rel="stylesheet" href="/assets/viewer.css">
+<script type="module" src="/assets/viewer.js"></script>
+</head>
+<body>
+<main>
+<h1 id="name">Shared location</h1>
+<p id="status">Opening the location&hellip;</p>
+<dl id="where" hidden>
+<dt>Where</dt><dd id="pos"></dd>
+<dt>Accuracy</dt><dd id="acc"></dd>
+<dt>Updated</dt><dd id="when"></dd>
+</dl>
+<p id="open" hidden><a id="geo" href="#">Open in a map app</a></p>
+<p class="note">The location is encrypted. This page decrypts it with the key at the end of the address, which never leaves your browser.</p>
+<noscript><p>This page needs JavaScript to decrypt the location.</p></noscript>
+</main>
+</body>
+</html>

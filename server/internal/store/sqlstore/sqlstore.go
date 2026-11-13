@@ -34,7 +34,7 @@ import (
 var schema embed.FS
 
 // schemaVersion is the version this server's code reads and writes.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // readers is how many connections may read at once.
 const readers = 4
@@ -760,6 +760,45 @@ func (t *tx) LastHeard(circle, device []byte) (uint64, bool, error) {
 	return uint64(at), err == nil, err
 }
 
+// ---- share links ----
+
+const shareCols = `id, account, device, expires_at, update_raw, seq, views, last_view, ended`
+
+func scanShare(row interface{ Scan(...any) error }) (store.Share, error) {
+	var v store.Share
+	var expires, seq, last int64
+	err := row.Scan(&v.ID, &v.Account, &v.Device, &expires, &v.Update, &seq, &v.Views, &last, &v.Ended)
+	v.ExpiresAt, v.Seq, v.LastView, v.Update = uint64(expires), uint64(seq), uint64(last), nilIfEmpty(v.Update)
+	return v, notFound(err)
+}
+
+func (t *tx) PutShare(v store.Share) error {
+	_, err := t.q.Exec(`INSERT OR REPLACE INTO shares (`+shareCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		v.ID, v.Account, v.Device, i64(v.ExpiresAt), nilIfEmpty(v.Update), i64(v.Seq), v.Views, i64(v.LastView), v.Ended)
+	return err
+}
+
+func (t *tx) Share(id []byte) (store.Share, error) {
+	return scanShare(t.q.QueryRow(`SELECT `+shareCols+` FROM shares WHERE id = ?`, id))
+}
+
+func (t *tx) SharesOf(device []byte) ([]store.Share, error) {
+	rows, err := t.q.Query(`SELECT `+shareCols+` FROM shares WHERE device = ? ORDER BY id`, device)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.Share
+	for rows.Next() {
+		v, err := scanShare(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 // ---- sweeping ----
 
 func (t *tx) Sweep(now uint64, r store.Retention) (store.Swept, error) {
@@ -784,6 +823,7 @@ func (t *tx) Sweep(now uint64, r store.Retention) (store.Swept, error) {
 	count(&n.Removals, `DELETE FROM removals WHERE at <= ? - ?`, at, i64(r.Removals))
 	count(&n.Invites, `DELETE FROM invites WHERE expires_at <= ? AND (result IS NULL OR result_at <= ? - ?)`, at, at, i64(r.Results))
 	count(&n.Watches, `DELETE FROM watches WHERE revoked AND not_after <= ?`, at)
+	count(&n.Shares, `DELETE FROM shares WHERE expires_at <= ?`, at)
 	if err != nil {
 		return n, err
 	}

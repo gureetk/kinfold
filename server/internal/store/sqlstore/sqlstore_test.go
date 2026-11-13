@@ -215,12 +215,12 @@ func TestFileMode(t *testing.T) {
 // A database at an older schema version is upgraded, keeping what it holds.
 func TestUpgrade(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "kinfold.db")
-	mustDo(t, open(t, path).Close())
+	v1, err := os.ReadFile("schema/1.sql")
+	mustDo(t, err)
 	db, err := sql.Open("sqlite3", "file:"+path)
 	mustDo(t, err)
-	// Back to version 1, as the first release left it, with a token in it.
-	for _, q := range []string{`DROP TABLE watches`, `DROP TABLE heard`, `PRAGMA user_version = 1`,
-		`INSERT INTO tokens VALUES (x'01', 1, 9, 0, NULL)`} {
+	// A database at version 1, as the first release left it, with a token in it.
+	for _, q := range []string{string(v1), `PRAGMA user_version = 1`, `INSERT INTO tokens VALUES (x'01', 1, 9, 0, NULL)`} {
 		_, err = db.Exec(q)
 		mustDo(t, err)
 	}

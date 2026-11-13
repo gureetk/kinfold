@@ -38,6 +38,7 @@ type Store struct {
 	invites    map[string]store.Invite
 	watches    map[string]store.Watch // circle ‖ device ‖ watcher
 	heard      map[string]heardAt     // circle ‖ device
+	shares     map[string]store.Share
 }
 
 type heardAt struct {
@@ -51,7 +52,7 @@ func New() *Store {
 		devices: map[string]store.Device{}, challenges: map[string]store.Challenge{},
 		sessions: map[string]store.Session{}, circles: map[string]*circleLog{},
 		removals: map[string]store.Removal{}, seen: map[string]seenRecord{}, invites: map[string]store.Invite{},
-		watches: map[string]store.Watch{}, heard: map[string]heardAt{}, nextSeq: 1}
+		watches: map[string]store.Watch{}, heard: map[string]heardAt{}, shares: map[string]store.Share{}, nextSeq: 1}
 }
 
 // tx records how to undo each write, so that a failed Update leaves nothing behind.
@@ -413,6 +414,22 @@ func (t *tx) LastHeard(circle, device []byte) (uint64, bool, error) {
 	return h.at, ok, nil
 }
 
+// ---- share links ----
+
+func (t *tx) PutShare(v store.Share) error         { set(t, t.s.shares, string(v.ID), v); return nil }
+func (t *tx) Share(id []byte) (store.Share, error) { return get(t.s.shares, id) }
+
+func (t *tx) SharesOf(device []byte) ([]store.Share, error) {
+	var out []store.Share
+	for _, v := range t.s.shares {
+		if bytes.Equal(v.Device, device) {
+			out = append(out, v)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i].ID, out[j].ID) < 0 })
+	return out, nil
+}
+
 // ---- sweeping ----
 
 // sweep deletes the entries of m for which gone is true, and counts them.
@@ -439,6 +456,7 @@ func (t *tx) Sweep(now uint64, r store.Retention) (store.Swept, error) {
 		return now >= v.ExpiresAt && (v.Result == nil || now >= v.ResultAt+r.Results)
 	})
 	n.Watches = sweep(t, t.s.watches, func(v store.Watch) bool { return v.Revoked && now >= v.NotAfter })
+	n.Shares = sweep(t, t.s.shares, func(v store.Share) bool { return now >= v.ExpiresAt })
 	// A closed circle goes with everything that names it.
 	gone := map[string]bool{}
 	n.Circles = sweep(t, t.s.circles, func(l *circleLog) bool {

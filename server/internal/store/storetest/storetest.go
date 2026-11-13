@@ -28,6 +28,7 @@ func Run(t *testing.T, open func(t *testing.T) store.Store) {
 		{"Envelopes", envelopes},
 		{"Invites", invites},
 		{"Watches", watches},
+		{"Shares", shares},
 		{"FailedUpdateLeavesNothing", failedUpdate},
 		{"PanicLeavesNothing", panicking},
 		{"Sweep", sweeping},
@@ -480,6 +481,33 @@ func watches(t *testing.T, s store.Store) {
 	})
 }
 
+func shares(t *testing.T, s store.Store) {
+	a := store.Share{ID: id(2), Account: id(1), Device: id(3), ExpiresAt: 100}
+	b := store.Share{ID: id(1), Account: id(1), Device: id(3), ExpiresAt: 200, Update: []byte("update"), Seq: 1 << 63,
+		Views: 7, LastView: 150, Ended: true}
+	update(t, s, func(tx store.Tx) error {
+		must(t, tx.PutShare(a))
+		must(t, tx.PutShare(b))
+		return tx.PutShare(store.Share{ID: id(3), Account: id(1), Device: id(4), ExpiresAt: 100})
+	})
+	view(t, s, func(tx store.Tx) error {
+		if got, err := tx.Share(id(1)); err != nil || !reflect.DeepEqual(got, b) {
+			t.Errorf("share: %+v %v", got, err)
+		}
+		if got, _ := tx.Share(id(2)); got.Update != nil || got.Ended || got.Views != 0 {
+			t.Errorf("a new share: %+v", got)
+		}
+		if _, err := tx.Share(id(4)); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("a missing share: %v", err)
+		}
+		of, _ := tx.SharesOf(id(3))
+		if len(of) != 2 || !bytes.Equal(of[0].ID, id(1)) || !bytes.Equal(of[1].ID, id(2)) {
+			t.Errorf("SharesOf, by ID: %d", len(of))
+		}
+		return nil
+	})
+}
+
 // A transaction that fails leaves nothing behind, whatever it wrote.
 func failedUpdate(t *testing.T, s store.Store) {
 	raws := entries(t, "")
@@ -635,6 +663,8 @@ func sweeping(t *testing.T, s store.Store) {
 		must(t, tx.PutWatch(store.Watch{Circle: oid, Device: id(1), Watcher: id(2), Grant: []byte{1}, NotAfter: now, Revoked: true}))
 		must(t, tx.PutWatch(store.Watch{Circle: oid, Device: id(1), Watcher: id(3), Grant: []byte{1}, NotAfter: now + 1, Revoked: true}))
 		must(t, tx.PutWatch(store.Watch{Circle: oid, Device: id(1), Watcher: id(4), Grant: []byte{1}, NotAfter: now}))
+		must(t, tx.PutShare(store.Share{ID: id(1), Account: id(1), Device: id(1), ExpiresAt: now}))
+		must(t, tx.PutShare(store.Share{ID: id(2), Account: id(1), Device: id(1), ExpiresAt: now + 1}))
 		return tx.PutInvite(store.Invite{ID: id(99), Circle: cid, Account: id(3), ExpiresAt: now + 9})
 	})
 	// Before the closed circle's time is up, nothing has run out.
@@ -644,7 +674,8 @@ func sweeping(t *testing.T, s store.Store) {
 		t.Errorf("swept %+v before anything ran out", n)
 	}
 	update(t, s, func(tx store.Tx) (err error) { n, err = tx.Sweep(now, r); return })
-	want := store.Swept{Challenges: 1, Sessions: 1, Tokens: 1, Envelopes: 2, Seen: 2, Removals: 2, Invites: 3, Watches: 2, Circles: 1}
+	want := store.Swept{Challenges: 1, Sessions: 1, Tokens: 1, Envelopes: 2, Seen: 2, Removals: 2, Invites: 3, Watches: 2, Shares: 1,
+		Circles: 1}
 	if n != want {
 		t.Errorf("swept %+v, want %+v", n, want)
 	}

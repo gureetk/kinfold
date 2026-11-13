@@ -108,7 +108,7 @@ func (s *Server) ServerKey() ed25519.PublicKey { return s.cfg.Key.Public().(ed25
 // Retention is how long the server keeps what has ended (API.md §15).
 var Retention = store.Retention{Removals: RemovedReadLife, Results: ResultKeep, ClosedCircles: ClosedKeep}
 
-// Sweep deletes what has run out (API.md §15). The server runs it every hour.
+// Sweep deletes what has run out (API.md §15). The server runs it every minute.
 func (s *Server) Sweep() (store.Swept, error) {
 	var n store.Swept
 	err := s.cfg.Store.Update(func(tx store.Tx) (err error) {
@@ -154,6 +154,14 @@ func (s *Server) routes() {
 	h("POST /v1/links", s.createLink)
 	h("PUT /v1/links/{link_id}/{slot}", s.putLinkSlot)
 	h("GET /v1/links/{link_id}/{slot}", s.getLinkSlot)
+
+	h("POST /v1/shares", s.createShare)
+	h("POST /v1/shares/{link_id}/updates", s.postShareUpdate)
+	h("GET /v1/shares/{link_id}", s.getShare)
+	h("DELETE /v1/shares/{link_id}", s.deleteShare)
+	h("GET /v1/shares/{link_id}/latest", s.latestShare)
+	h("GET /s/{link_id}", s.viewerPage)
+	h("GET /assets/{name}", s.viewerAsset)
 
 	h("POST /v1/invites", s.createInvite)
 	h("POST /v1/invites/{invite_id}/requests", s.postJoinRequest)
@@ -437,6 +445,7 @@ type Limits struct {
 	LinksPerDevice       int // link mailboxes an hour, per device (direction 1)
 	LinksPerAddress      int // link mailboxes an hour without a session, per address (direction 2)
 	LinksPerServer       int // link mailboxes an hour without a session, for the whole server
+	SharesPerDevice      int // share links open at once, per device
 	PendingInvites       int // per circle
 	WaitingRequests      int // per invite
 }
@@ -457,6 +466,7 @@ func (l Limits) withDefaults() Limits {
 	def(&l.LinksPerDevice, 20)
 	def(&l.LinksPerAddress, 6)
 	def(&l.LinksPerServer, 60)
+	def(&l.SharesPerDevice, 5)
 	def(&l.PendingInvites, 16)
 	def(&l.WaitingRequests, 3)
 	return l
