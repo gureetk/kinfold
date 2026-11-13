@@ -29,6 +29,7 @@ func Run(t *testing.T, open func(t *testing.T) store.Store) {
 		{"Invites", invites},
 		{"Watches", watches},
 		{"Shares", shares},
+		{"Pushes", pushes},
 		{"FailedUpdateLeavesNothing", failedUpdate},
 		{"PanicLeavesNothing", panicking},
 		{"Sweep", sweeping},
@@ -503,6 +504,38 @@ func shares(t *testing.T, s store.Store) {
 		of, _ := tx.SharesOf(id(3))
 		if len(of) != 2 || !bytes.Equal(of[0].ID, id(1)) || !bytes.Equal(of[1].ID, id(2)) {
 			t.Errorf("SharesOf, by ID: %d", len(of))
+		}
+		return nil
+	})
+}
+
+func pushes(t *testing.T, s store.Store) {
+	relay := store.PushReg{Device: id(1), Kind: "relay", Notify: []byte("notify"), Locate: []byte("locate")}
+	web := store.PushReg{Device: id(2), Kind: "webpush", Endpoint: "https://push.example/x", P256dh: id(3), Auth: id(4)}
+	update(t, s, func(tx store.Tx) error {
+		must(t, tx.PutPush(relay))
+		return tx.PutPush(web)
+	})
+	view(t, s, func(tx store.Tx) error {
+		if got, err := tx.Push(id(1)); err != nil || !reflect.DeepEqual(got, relay) {
+			t.Errorf("relay registration: %+v %v", got, err)
+		}
+		if got, err := tx.Push(id(2)); err != nil || !reflect.DeepEqual(got, web) {
+			t.Errorf("webpush registration: %+v %v", got, err)
+		}
+		return nil
+	})
+	// A new registration replaces the old one whole.
+	update(t, s, func(tx store.Tx) error {
+		must(t, tx.PutPush(store.PushReg{Device: id(1), Kind: "relay", Notify: []byte("other")}))
+		return tx.DeletePush(id(2))
+	})
+	view(t, s, func(tx store.Tx) error {
+		if got, _ := tx.Push(id(1)); got.Locate != nil || string(got.Notify) != "other" {
+			t.Errorf("replaced: %+v", got)
+		}
+		if _, err := tx.Push(id(2)); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("deleted: %v", err)
 		}
 		return nil
 	})

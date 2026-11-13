@@ -154,6 +154,18 @@ type Share struct {
 	Ended     bool // deleted: kept, empty, until ExpiresAt, to answer 410
 }
 
+// PushReg is a device's push registration (API.md §12): one per device.
+type PushReg struct {
+	Device []byte
+	Kind   string // "relay" or "webpush"; "dropped" once the push host has said it is dead
+	// relay: the capabilities for alert and background pushes, and for location pushes
+	// (nil without the entitlement).
+	Notify, Locate []byte
+	// webpush: the endpoint and the subscription's keys (RFC 8291).
+	Endpoint     string
+	P256dh, Auth []byte
+}
+
 // Tx is a transaction.
 type Tx interface {
 	Settings() (Settings, error)
@@ -228,6 +240,10 @@ type Tx interface {
 	Share(id []byte) (Share, error)
 	// SharesOf lists the share links a device made, by ID.
 	SharesOf(device []byte) ([]Share, error)
+
+	PutPush(PushReg) error
+	Push(device []byte) (PushReg, error)
+	DeletePush(device []byte) error
 
 	// Sweep deletes what has run out by now (API.md §15) and counts what it deleted.
 	Sweep(now uint64, r Retention) (Swept, error)

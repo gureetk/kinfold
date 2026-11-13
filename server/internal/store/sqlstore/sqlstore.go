@@ -34,7 +34,7 @@ import (
 var schema embed.FS
 
 // schemaVersion is the version this server's code reads and writes.
-const schemaVersion = 3
+const schemaVersion = 4
 
 // readers is how many connections may read at once.
 const readers = 4
@@ -797,6 +797,27 @@ func (t *tx) SharesOf(device []byte) ([]store.Share, error) {
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+// ---- push registrations ----
+
+func (t *tx) PutPush(v store.PushReg) error {
+	_, err := t.q.Exec(`INSERT OR REPLACE INTO pushes (device, kind, notify, locate, endpoint, p256dh, auth) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		v.Device, v.Kind, nilIfEmpty(v.Notify), nilIfEmpty(v.Locate), v.Endpoint, nilIfEmpty(v.P256dh), nilIfEmpty(v.Auth))
+	return err
+}
+
+func (t *tx) Push(device []byte) (store.PushReg, error) {
+	var v store.PushReg
+	err := t.q.QueryRow(`SELECT device, kind, notify, locate, endpoint, p256dh, auth FROM pushes WHERE device = ?`, device).
+		Scan(&v.Device, &v.Kind, &v.Notify, &v.Locate, &v.Endpoint, &v.P256dh, &v.Auth)
+	v.Notify, v.Locate, v.P256dh, v.Auth = nilIfEmpty(v.Notify), nilIfEmpty(v.Locate), nilIfEmpty(v.P256dh), nilIfEmpty(v.Auth)
+	return v, notFound(err)
+}
+
+func (t *tx) DeletePush(device []byte) error {
+	_, err := t.q.Exec(`DELETE FROM pushes WHERE device = ?`, device)
+	return err
 }
 
 // ---- sweeping ----

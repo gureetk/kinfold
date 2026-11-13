@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/gureetk/kinfold/server/internal/envelope"
+	"github.com/gureetk/kinfold/server/internal/push"
 	"github.com/gureetk/kinfold/server/internal/store"
 	"github.com/gureetk/kinfold/server/internal/wire"
 )
@@ -43,6 +44,44 @@ func (s *seen) Digest(sender []byte, seq uint64) ([32]byte, bool) {
 	}
 	s.rec = r
 	return r.Digest, ok
+}
+
+// wakeRecipients prepares the pushes Kinfold-Wake asks for (API.md §7, §12): a records push
+// when the delivery record fits in one, otherwise a wake push, for each recipient that has no
+// stream open. Wake-ups have their own limits, which refuse the upload past them.
+func (s *Server) wakeRecipients(q *request, tx store.Tx, wake string, recipients [][]byte, raw []byte) ([]*pushJob, error) {
+	if wake == "" {
+		return nil, nil
+	}
+	l := s.limiter.limits
+	if wake == "notify" {
+		if ok, wait := s.limiter.allow("wake/notify/"+string(q.dev.ID), l.WakeNotify, hour, q.now); !ok {
+			return nil, rateLimited(wait)
+		}
+	} else {
+		for _, r := range recipients {
+			if ok, wait := s.limiter.allow("wake/locate/"+string(q.dev.ID)+"/"+string(r), l.WakeLocate, hour, q.now); !ok {
+				return nil, rateLimited(wait)
+			}
+		}
+	}
+	ptype, body := uint8(push.Records), push.RecordsBody([][]byte{push.Record(q.now, raw)})
+	if len(body) > push.MaxBody {
+		ptype, body = push.Wake, nil
+	}
+	delivery := uint8(push.Alert)
+	if wake == "locate" {
+		delivery = push.Location
+	}
+	var jobs []*pushJob
+	for _, r := range recipients {
+		j, err := s.preparePush(tx, r, ptype, body, delivery, push.Alert, q.now)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, j)
+	}
+	return jobs, nil
 }
 
 // postEnvelope is POST /v1/circles/{id}/envelopes, with an optional Kinfold-Wake.
@@ -101,11 +140,15 @@ func (s *Server) postEnvelope(q *request) error {
 		}
 		receivedAt = q.now
 		recipients := env.Recipients()
+		jobs, err := s.wakeRecipients(q, tx, wake, recipients, raw)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.PutEnvelope(store.Envelope{Circle: id, Sender: env.Sender, Recipients: recipients,
 			ReceivedAt: q.now, ExpiresAt: q.now + uint64(env.TTL)*second, Raw: raw}); err != nil {
 			return err
 		}
-		q.afterCommit(func() { s.tellRecords(recipients) })
+		q.afterCommit(func() { s.tellRecords(recipients); s.send(jobs) })
 		if env.Kind == envelope.Circle { // a circle envelope, and nothing else, resets its sender's watches
 			if err := tx.Heard(id, env.Sender, q.now); err != nil {
 				return err

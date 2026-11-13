@@ -32,8 +32,8 @@ type live struct {
 	cid  []byte
 }
 
-func newLive(t *testing.T, limits api.Limits, times api.StreamTimes) *live {
-	e := newEnv(t, limits, func(c *api.Config) { c.Stream = times })
+func newLive(t *testing.T, limits api.Limits, times api.StreamTimes, opts ...func(*api.Config)) *live {
+	e := newEnv(t, limits, append([]func(*api.Config){func(c *api.Config) { c.Stream = times }}, opts...)...)
 	devs := devices(t)
 	e.register(devs)
 	cid := e.replayMainLog(devs, 20)

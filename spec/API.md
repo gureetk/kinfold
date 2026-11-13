@@ -1,6 +1,6 @@
 # Kinfold HTTP API, version 0
 
-**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §11 and the part of §16 that a first device needs; the viewer page shows a position as text until the map of §13 is in. Until push (§12) is in, it wakes no device, and silence alerts reach only devices with a stream open; `stream_post` isn't offered.
+**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §12 and the part of §16 that a first device needs, with these gaps: it doesn't send Web Push messages yet, and takes no `apns` registrations; `stream_post` isn't offered; the viewer page shows a position as text until the map of §13 is in.
 **License:** [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 Section numbers written "spec §…" point into PROTOCOL.md. Where the two documents disagree about bytes, the spec wins.
@@ -378,11 +378,12 @@ A device with an open stream needs no push. Android phones keep a stream by defa
 {"kind": "apns",    "notify": "<token>", "locate": "<token>", "environment": "production"}
 ```
 
-- **`relay`** is the App Store build's route. The capabilities come from the relay (§14). `locate` is present when the app has Apple's location-push entitlement and the person has allowed location all the time.
+- **`relay`** is the App Store build's route. The capabilities come from the relay (§14), as base64url. `locate` is present when the app has Apple's location-push entitlement and the person has allowed location all the time. A server with no relay configured refuses it (403).
 - **`webpush`** is UnifiedPush. The server sends the sealed push as a Web Push message (RFC 8030), encrypted to `p256dh` and `auth` (RFC 8291) and signed with its VAPID key (RFC 8292).
-- **`apns`** exists only on a server that holds its own Apple key, for families who build the iOS app themselves.
+- **`apns`** exists only on a server that holds its own Apple key, for families who build the iOS app themselves; any other server refuses it (403).
+- **Who.** Any receiving device (403 for a recovery device). A registration that breaks a rule here, or the rules for push addresses below, is 400.
 
-**What is sent.** Always the sealed, signed, fixed-size push of spec §14.2, and nothing else. For an envelope uploaded with `Kinfold-Wake`, the server sends a `records` push when the delivery record fits in one, otherwise a `wake` push, and the device fetches its inbox. Every Web Push request uses the same `TTL` (3,600) and `Urgency` (`high`), so a distributor can't tell an alert from a wake-up.
+**What is sent.** Always the sealed, signed, fixed-size push of spec §14.2, and nothing else, sealed to the newest current key bundle the server knows for the device: the one it registered with, or a later one in a circle's log. A device with a stream open gets no push. For an envelope uploaded with `Kinfold-Wake`, the server sends a `records` push when the delivery record fits in one, otherwise a `wake` push, and the device fetches its inbox. An upload whose wake-up is past its limit (§3) is refused whole, with 429, and nothing is stored. Every Web Push request uses the same `TTL` (3,600) and `Urgency` (`high`), so a distributor can't tell an alert from a wake-up.
 
 **Delivery types.** Apple needs to be told how to deliver a push, so the server names one of three:
 
@@ -401,7 +402,7 @@ The relay and Apple see the delivery type. Neither sees what kind of alert it is
 - The check is made when the address is registered and again before every send, and the server connects to the address it checked.
 - Redirects are not followed. The request times out after 10 seconds. The response body is ignored.
 - The operator MAY list push hosts that are allowed without the public-address test, for a distributor on the home network. With such a list, the operator MAY refuse every other host.
-- A 404 or 410 from the push host ends the registration, and the device is sent `push_dropped`.
+- A 404 or 410 from the push host, or 410 from the relay, ends the registration, and the device is sent `push_dropped`: at once if it has a stream open, otherwise when it next opens one.
 
 ---
 
