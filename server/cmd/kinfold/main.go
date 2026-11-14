@@ -501,8 +501,9 @@ func adminCommand(cmd string, args []string) error {
 			return err
 		}
 		fmt.Printf("Setup code for the first phone (scan it in the app, or type it):\n\n  %v\n\n", out["code"])
-		fmt.Printf("Server:      %v\nServer key:  %v\nExpires at:  %v\n", out["server_url"], out["server_key"], when(out["expires_at"]))
-		fmt.Println("\nCompare the server key with the one the app shows before you trust it.")
+		fmt.Printf("Server:       %v\nFingerprint:  %v\nExpires at:   %v\n", out["server_url"], out["fingerprint"], when(out["expires_at"]))
+		fmt.Println("\nA phone set up from this code knows the server's key. One set up by typing the address shows the\n" +
+			"fingerprint instead: compare it with the one above before you trust it.")
 	case cmd == "token" && len(sub) == 1 && sub[0] == "create":
 		out, _, err := call("POST", "/tokens", map[string]any{"expires_in_ms": ms})
 		if err != nil {
@@ -603,6 +604,7 @@ func adminCommand(cmd string, args []string) error {
 			return err
 		}
 		up, _ := out["uptime_ms"].(float64)
+		fmt.Printf("server key fingerprint: %v\n", out["fingerprint"])
 		fmt.Printf("up %v, clock synchronized: %v\n", time.Duration(up)*time.Millisecond, out["clock_synced"])
 		if free, ok := out["free_disk"].(float64); ok {
 			fmt.Printf("free disk: %.1f GB\n", free/1e9)

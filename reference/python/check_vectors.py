@@ -428,6 +428,7 @@ check("share", "update", u["payload"] == SH["update"]["payload"] and u["seq"] ==
 AU = v["auth"]
 info = idn.parse_server_info(hx(AU["server_info"]))
 check("auth", "server info", info["sig_ok"] and info["server_key"].hex() == AU["server_key"] and info["url"] == AU["server_url"])
+check("auth", "fingerprint", idn.server_fingerprint(hx(AU["server_key"])) == AU["fingerprint"])
 ch, did, sk = hx(AU["challenge"]), hx(AU["device_id"]), hx(AU["server_key"])
 check("auth", "challenge", verify(sk, "auth-challenge", ch + did + AU["expires_at"].to_bytes(8, "big"), hx(AU["challenge_sig"])))
 dsk_pub = hx(devices[AU["device"]]["dsk_pub"])

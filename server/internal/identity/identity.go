@@ -8,6 +8,9 @@ package identity
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/sha512"
+	"fmt"
+	"strings"
 
 	"github.com/gureetk/kinfold/server/internal/kcrypto"
 	"github.com/gureetk/kinfold/server/internal/wire"
@@ -244,6 +247,26 @@ func MakeSetup(url string, key, regToken []byte, expiresAt uint64) []byte {
 
 // SetupCode is "KFS0" ‖ b64u(Setup).
 func SetupCode(setup []byte) string { return "KFS0" + wire.EncodeB64u(setup) }
+
+// Fingerprint is the server key's fingerprint (§13.1): SHA-512 iterated 5,200 times under
+// its own label, read as 30 digits in six groups of five, which a person compares with
+// what an app shows.
+func Fingerprint(key ed25519.PublicKey) string {
+	h := append(kcrypto.Label("server-fingerprint"), key...)
+	for range 5200 {
+		sum := sha512.Sum512(append(h, key...))
+		h = sum[:]
+	}
+	groups := make([]string, 0, 6)
+	for i := 0; i < 30; i += 5 {
+		var n uint64
+		for _, b := range h[i : i+5] {
+			n = n<<8 | uint64(b)
+		}
+		groups = append(groups, fmt.Sprintf("%05d", n%100_000))
+	}
+	return strings.Join(groups, " ")
+}
 
 // ParseSetup parses Setup bytes.
 func ParseSetup(raw []byte) (Setup, bool) {

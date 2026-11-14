@@ -17,6 +17,7 @@ import (
 
 	"github.com/gureetk/kinfold/server/internal/admin"
 	"github.com/gureetk/kinfold/server/internal/api"
+	"github.com/gureetk/kinfold/server/internal/identity"
 	"github.com/gureetk/kinfold/server/internal/store"
 	"github.com/gureetk/kinfold/server/internal/store/sqlstore"
 )
@@ -114,7 +115,7 @@ func TestServerStatus(t *testing.T) {
 	l.open(alex, "")
 	h := l.admin("GET", "/status", "")
 	if h["streams"] != 1.0 || h["pushes_in_flight"] != 0.0 || h["link_mailboxes"] != 0.0 || h["relay_reachable"] != true ||
-		h["clock_synced"] != true || h["last_backup_at"] != 0.0 {
+		h["clock_synced"] != true || h["last_backup_at"] != 0.0 || h["fingerprint"] != identity.Fingerprint(l.srv.ServerKey()) {
 		t.Fatalf("health: %v", h)
 	}
 	if free, _ := h["free_disk"].(float64); free <= 0 {
