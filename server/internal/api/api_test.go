@@ -39,6 +39,7 @@ type env struct {
 	clk *clock.Fake
 	srv *api.Server
 	adm http.Handler
+	st  store.Store
 }
 
 // newStore returns the store a test runs on: SQLite in a temporary directory, as the server
@@ -64,8 +65,8 @@ func newEnv(t *testing.T, limits api.Limits, opts ...func(*api.Config)) *env {
 	for _, o := range opts {
 		o(&cfg)
 	}
-	e := &env{t: t, clk: clk, srv: api.New(cfg)}
-	e.adm = (&admin.Admin{Store: st, Clock: clk, Key: key, URL: url, Notify: e.srv.Notice, Remove: e.srv}).Handler()
+	e := &env{t: t, clk: clk, srv: api.New(cfg), st: st}
+	e.adm = (&admin.Admin{Store: st, Clock: clk, Key: key, URL: url, Notify: e.srv.Notice, API: e.srv}).Handler()
 	t.Cleanup(func() { e.srv.CloseStreams(5 * time.Second) })
 	e.admin("PATCH", "/settings", `{"member_tokens": true, "web_devices": true}`)
 	return e

@@ -29,6 +29,7 @@ type Settings struct {
 	MemberTokens bool   // admins may mint registration tokens with invites (§9)
 	WebDevices   bool   // web and Home Assistant devices may be registered (§5)
 	RepairUntil  uint64 // repair mode lasts until this time (ms); 0 when off (§6)
+	LastBackupAt uint64 // when the last backup was written (ms); 0 if never (§16)
 }
 
 // Token is a registration token. Only its hash is kept.

@@ -63,6 +63,12 @@ type mailboxes struct {
 
 func newMailboxes() *mailboxes { return &mailboxes{boxes: map[string]*mailbox{}} }
 
+func (m *mailboxes) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.boxes)
+}
+
 // SweepLinks forgets the mailboxes that have ended: they are gone within a minute of it
 // (API.md §15). The server runs it every minute.
 func (s *Server) SweepLinks() int {

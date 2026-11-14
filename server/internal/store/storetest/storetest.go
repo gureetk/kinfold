@@ -133,7 +133,7 @@ func records(t *testing.T, s store.Store) {
 		Nickname: "kitchen display"}
 	phone := store.Device{ID: id(4), Account: id(1), Kind: 1, DSK: id(6), Cert: []byte("cert"), Bundle: []byte("bundle")}
 	update(t, s, func(tx store.Tx) error {
-		must(t, tx.PutSettings(store.Settings{MemberTokens: true, RepairUntil: 1 << 50}))
+		must(t, tx.PutSettings(store.Settings{MemberTokens: true, RepairUntil: 1 << 50, LastBackupAt: 77}))
 		must(t, tx.PutToken(store.Token{Hash: id(8), CreatedAt: 2, ExpiresAt: 9}))
 		must(t, tx.PutToken(store.Token{Hash: id(7), CreatedAt: 1, ExpiresAt: 9, Spent: true, Invite: id(9)}))
 		must(t, tx.PutAccount(acc))
@@ -148,7 +148,7 @@ func records(t *testing.T, s store.Store) {
 		return nil
 	})
 	update(t, s, func(tx store.Tx) error {
-		if st, _ := tx.Settings(); st != (store.Settings{MemberTokens: true, RepairUntil: 1 << 50}) {
+		if st, _ := tx.Settings(); st != (store.Settings{MemberTokens: true, RepairUntil: 1 << 50, LastBackupAt: 77}) {
 			t.Errorf("settings: %+v", st)
 		}
 		toks, _ := tx.Tokens()

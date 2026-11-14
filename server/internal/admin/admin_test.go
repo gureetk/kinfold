@@ -3,12 +3,14 @@
 package admin_test
 
 import (
+	"archive/tar"
 	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,6 +24,7 @@ import (
 	"github.com/gureetk/kinfold/server/internal/identity"
 	"github.com/gureetk/kinfold/server/internal/store"
 	"github.com/gureetk/kinfold/server/internal/store/memstore"
+	"github.com/gureetk/kinfold/server/internal/store/sqlstore"
 	"github.com/gureetk/kinfold/server/internal/tiles"
 	"github.com/gureetk/kinfold/server/internal/tiles/tilestest"
 	"github.com/gureetk/kinfold/server/internal/wire"
@@ -207,7 +210,7 @@ func TestRemoveAccount(t *testing.T) {
 		return tx.PutSession(store.Session{Hash: id(5), Device: id(3), ExpiresAt: clk.Now() + 1000})
 	})
 	srv := api.New(api.Config{URL: url, Key: key, Clock: clk, Store: st})
-	h := (&admin.Admin{Store: st, Clock: clk, Remove: srv}).Handler()
+	h := (&admin.Admin{Store: st, Clock: clk, API: srv}).Handler()
 	call := func(method, path string, want int) string {
 		t.Helper()
 		rec := httptest.NewRecorder()
@@ -246,5 +249,91 @@ func TestRemoveAccount(t *testing.T) {
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Errorf("%s without the API server: %d", path, rec.Code)
 		}
+	}
+}
+
+// A backup is a tar archive of a database snapshot and the server's keys, written while the
+// server runs; it records when it was made, and won't overwrite a file.
+func TestBackup(t *testing.T) {
+	dir := t.TempDir()
+	st, err := sqlstore.Open(filepath.Join(dir, "kinfold.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	serverKey, vapidKey := bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32)
+	os.WriteFile(filepath.Join(dir, "server.key"), serverKey, 0o600)
+	os.WriteFile(filepath.Join(dir, "vapid.key"), vapidKey, 0o600)
+	st.Update(func(tx store.Tx) error {
+		return tx.PutAccount(store.Account{ID: []byte("a"), IK: []byte("k"), Nickname: "kept"})
+	})
+	clk := clock.NewFake(1_793_635_200_000)
+	h := (&admin.Admin{Store: st, Clock: clk, DataDir: dir}).Handler()
+	call := func(body string, want int) map[string]any {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("POST", "/backup", strings.NewReader(body)))
+		if rec.Code != want {
+			t.Fatalf("backup %s: %d %s, want %d", body, rec.Code, rec.Body, want)
+		}
+		var out map[string]any
+		json.Unmarshal(rec.Body.Bytes(), &out)
+		return out
+	}
+	file := filepath.Join(t.TempDir(), "backup.tar")
+	js, _ := json.Marshal(map[string]string{"file": file})
+	out := call(string(js), http.StatusOK)
+	if fi, err := os.Stat(file); err != nil || fi.Mode().Perm() != 0o600 || out["size"] != float64(fi.Size()) || out["at"] != float64(clk.Now()) {
+		t.Fatalf("the archive: %v %v", out, err)
+	}
+	got := map[string][]byte{}
+	f, _ := os.Open(file)
+	tr := tar.NewReader(f)
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			break
+		}
+		got[hdr.Name], _ = io.ReadAll(tr)
+	}
+	f.Close()
+	if len(got) != 3 || !bytes.Equal(got["server.key"], serverKey) || !bytes.Equal(got["vapid.key"], vapidKey) {
+		t.Fatalf("the archive holds %d files", len(got))
+	}
+	snap := filepath.Join(t.TempDir(), "snap.db")
+	os.WriteFile(snap, got["kinfold.db"], 0o600)
+	b, err := sqlstore.Open(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.View(func(tx store.Tx) error {
+		if a, err := tx.Account([]byte("a")); err != nil || a.Nickname != "kept" {
+			t.Errorf("the snapshot's account: %+v %v", a, err)
+		}
+		return nil
+	})
+	b.Close()
+	st.View(func(tx store.Tx) error {
+		if s, _ := tx.Settings(); s.LastBackupAt != clk.Now() {
+			t.Errorf("last backup: %d", s.LastBackupAt)
+		}
+		return nil
+	})
+	if entries, _ := os.ReadDir(dir); len(entries) != 3+2 { // the database with -wal and -shm, and the keys
+		t.Errorf("the data directory holds %d files: the snapshot wasn't cleaned up", len(entries))
+	}
+
+	call(string(js), http.StatusConflict)
+	call(`{"file": "backup.tar"}`, http.StatusBadRequest)
+	os.Remove(filepath.Join(dir, "vapid.key")) // a server without Web Push
+	other := filepath.Join(t.TempDir(), "b2.tar")
+	js, _ = json.Marshal(map[string]string{"file": other})
+	call(string(js), http.StatusOK)
+	// The memory store can't be backed up.
+	rec := httptest.NewRecorder()
+	(&admin.Admin{Store: memstore.New(), Clock: clk, DataDir: dir}).Handler().ServeHTTP(rec,
+		httptest.NewRequest("POST", "/backup", strings.NewReader(string(js))))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("memory store: %d", rec.Code)
 	}
 }

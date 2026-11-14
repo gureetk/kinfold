@@ -259,3 +259,29 @@ func TestNewerSchema(t *testing.T) {
 		t.Fatalf("opened a newer database: %v", err)
 	}
 }
+
+// A backup is a snapshot the store opens again with everything in it, taken while the
+// database stays open; it won't overwrite a file.
+func TestBackup(t *testing.T) {
+	dir := t.TempDir()
+	s := open(t, filepath.Join(dir, "kinfold.db"))
+	mustDo(t, s.Update(func(tx store.Tx) error {
+		return tx.PutAccount(store.Account{ID: []byte("acc"), IK: []byte("ik"), CreatedAt: 3, Nickname: "n"})
+	}))
+	out := filepath.Join(dir, "backup.db")
+	mustDo(t, s.Backup(out))
+	if st, err := os.Stat(out); err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("the backup file: %v", err)
+	}
+	if err := s.Backup(out); err == nil {
+		t.Fatal("a backup overwrote a file")
+	}
+	mustDo(t, s.Update(func(tx store.Tx) error { return tx.DeleteAccount([]byte("acc")) })) // after the snapshot
+	b := open(t, out)
+	mustDo(t, b.View(func(tx store.Tx) error {
+		if a, err := tx.Account([]byte("acc")); err != nil || a.Nickname != "n" {
+			t.Errorf("the backup's account: %+v %v", a, err)
+		}
+		return nil
+	}))
+}

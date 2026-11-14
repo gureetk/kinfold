@@ -34,7 +34,7 @@ import (
 var schema embed.FS
 
 // schemaVersion is the version this server's code reads and writes.
-const schemaVersion = 5
+const schemaVersion = 6
 
 // readers is how many connections may read at once.
 const readers = 4
@@ -43,6 +43,7 @@ const readers = 4
 type Store struct {
 	w, r *sql.DB
 	wmu  sync.Mutex // held through a write transaction and the update of states after it
+	dsn  func(url.Values) string
 
 	mu     sync.Mutex
 	states map[string]*memberlog.State // the latest state known of each circle, by ID
@@ -87,7 +88,38 @@ func Open(path string) (*Store, error) {
 	}
 	r.SetMaxOpenConns(readers)
 	r.SetMaxIdleConns(readers)
-	return &Store{w: w, r: r, states: map[string]*memberlog.State{}}, nil
+	return &Store{w: w, r: r, dsn: dsn, states: map[string]*memberlog.State{}}, nil
+}
+
+// Backup writes a consistent snapshot of the database to path, a file that must not exist yet,
+// readable only by the server's user. It reads on a connection of its own, so writes go on
+// meanwhile.
+func (s *Store) Backup(path string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	err = func() error {
+		db, err := sql.Open("sqlite3", s.dsn(url.Values{"_pragma": {"busy_timeout(10000)"}}))
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		if _, err := db.Exec(`VACUUM INTO ?`, path); err != nil {
+			return err
+		}
+		f, err := os.OpenFile(path, os.O_RDWR, 0)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		return f.Sync()
+	}()
+	if err != nil {
+		os.Remove(path)
+	}
+	return err
 }
 
 // migrate brings the database to schemaVersion, one version per transaction.
@@ -213,16 +245,16 @@ func unframes(b []byte) ([][]byte, error) {
 
 func (t *tx) Settings() (store.Settings, error) {
 	var s store.Settings
-	var until int64
-	err := t.q.QueryRow(`SELECT member_tokens, web_devices, repair_until FROM settings WHERE id = 1`).
-		Scan(&s.MemberTokens, &s.WebDevices, &until)
-	s.RepairUntil = uint64(until)
+	var until, backup int64
+	err := t.q.QueryRow(`SELECT member_tokens, web_devices, repair_until, last_backup_at FROM settings WHERE id = 1`).
+		Scan(&s.MemberTokens, &s.WebDevices, &until, &backup)
+	s.RepairUntil, s.LastBackupAt = uint64(until), uint64(backup)
 	return s, err
 }
 
 func (t *tx) PutSettings(s store.Settings) error {
-	_, err := t.q.Exec(`UPDATE settings SET member_tokens = ?, web_devices = ?, repair_until = ? WHERE id = 1`,
-		s.MemberTokens, s.WebDevices, i64(s.RepairUntil))
+	_, err := t.q.Exec(`UPDATE settings SET member_tokens = ?, web_devices = ?, repair_until = ?, last_backup_at = ? WHERE id = 1`,
+		s.MemberTokens, s.WebDevices, i64(s.RepairUntil), i64(s.LastBackupAt))
 	return err
 }
 
