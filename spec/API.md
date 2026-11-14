@@ -530,7 +530,7 @@ The web console adds its own protections, since a console on `localhost` is a kn
 | `GET /regions`, `PUT /regions/{id}`, `DELETE /regions/{id}` | `kinfold region list\|add ID FILE [--name NAME]\|remove ID` | Map regions (§13). `PUT` takes `{"file", "name"}`: the server copies the file in, checks that it is a PMTiles version 3 archive, and keeps it under its SHA-256, so a file never changes under a download |
 | `PUT /coarse`, `DELETE /coarse` | `kinfold coarse set FILE\|remove` | The coarse archive (§13), refused if it goes past zoom 13 |
 
-The setup code is printed as text for now, with the server key's fingerprint.
+`kinfold setup` draws the setup code as a QR code when its output is a terminal, and prints it as text too, with the server key's fingerprint.
 
 ---
 
