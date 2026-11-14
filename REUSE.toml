@@ -3,12 +3,12 @@
 version = 1
 
 [[annotations]]
-path = ["README.md", "SECURITY.md", "CONTRIBUTING.md", "TRADEMARK.md", "spec/*.md", "spec/vectors/README.md"]
+path = ["README.md", "SECURITY.md", "CONTRIBUTING.md", "TRADEMARK.md", "CLAUDE.md", "spec/*.md", "spec/vectors/README.md"]
 SPDX-FileCopyrightText = "Kinfold contributors"
 SPDX-License-Identifier = "CC-BY-4.0"
 
 [[annotations]]
-path = ["spec/vectors/*.json", ".github/**", ".gitignore", "REUSE.toml"]
+path = ["spec/vectors/*.json", ".github/**", ".claude/**", ".gitignore", "REUSE.toml"]
 SPDX-FileCopyrightText = "Kinfold contributors"
 SPDX-License-Identifier = "CC0-1.0"
 
