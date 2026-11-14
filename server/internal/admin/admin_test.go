@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/gureetk/kinfold/server/internal/admin"
+	"github.com/gureetk/kinfold/server/internal/api"
 	"github.com/gureetk/kinfold/server/internal/clock"
 	"github.com/gureetk/kinfold/server/internal/identity"
 	"github.com/gureetk/kinfold/server/internal/store"
@@ -187,5 +189,62 @@ func TestMaps(t *testing.T) {
 	none.ServeHTTP(rec, httptest.NewRequest("GET", "/regions", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("no library: %d", rec.Code)
+	}
+}
+
+// An account in no circle is removed with its devices and their sessions; without the API
+// server to remove through, the admin socket says it can't.
+func TestRemoveAccount(t *testing.T) {
+	seed := sha256.Sum256([]byte("kinfold admin test key"))
+	key := ed25519.NewKeyFromSeed(seed[:])
+	clk := clock.NewFake(1_793_635_200_000)
+	st := memstore.New()
+	id := func(b byte) []byte { return bytes.Repeat([]byte{b}, 16) }
+	st.Update(func(tx store.Tx) error {
+		tx.PutAccount(store.Account{ID: id(1), IK: id(2), CreatedAt: 1_793_000_000_000})
+		tx.PutDevice(store.Device{ID: id(3), Account: id(1), Kind: 1, DSK: id(4), Cert: []byte("c"), Bundle: []byte("b"),
+			CreatedAt: 1_793_000_000_000, LastSeenAt: 1_793_600_000_000})
+		return tx.PutSession(store.Session{Hash: id(5), Device: id(3), ExpiresAt: clk.Now() + 1000})
+	})
+	srv := api.New(api.Config{URL: url, Key: key, Clock: clk, Store: st})
+	h := (&admin.Admin{Store: st, Clock: clk, Remove: srv}).Handler()
+	call := func(method, path string, want int) string {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(method, path, nil))
+		if rec.Code != want {
+			t.Fatalf("%s %s: %d %s, want %d", method, path, rec.Code, rec.Body, want)
+		}
+		return rec.Body.String()
+	}
+	want := `[{"account_id":"AQEBAQEBAQEBAQEBAQEBAQ","circles":0,"created_day":"2026-10-26","devices":[{"created_day":"2026-10-26",` +
+		`"device_id":"AwMDAwMDAwMDAwMDAwMDAw","kind":1,"last_seen_day":"2026-11-02","nickname":""}],"nickname":"","operator":false}]`
+	if got := strings.TrimSpace(call("GET", "/accounts", http.StatusOK)); got != want {
+		t.Fatalf("accounts:\n%s\nwant\n%s", got, want)
+	}
+	if got := strings.TrimSpace(call("GET", "/circles", http.StatusOK)); got != "[]" {
+		t.Fatalf("circles: %s", got)
+	}
+	call("DELETE", "/accounts/"+wire.EncodeB64u(id(1)), http.StatusNoContent)
+	call("DELETE", "/accounts/"+wire.EncodeB64u(id(1)), http.StatusNotFound)
+	st.View(func(tx store.Tx) error {
+		_, e1 := tx.Device(id(3))
+		_, e2 := tx.Session(id(5))
+		if !errors.Is(e1, store.ErrNotFound) || !errors.Is(e2, store.ErrNotFound) {
+			t.Error("the account's device or session is still there")
+		}
+		return nil
+	})
+	if got := strings.TrimSpace(call("GET", "/accounts", http.StatusOK)); got != "[]" {
+		t.Fatalf("accounts after: %s", got)
+	}
+
+	none := (&admin.Admin{Store: st, Clock: clk}).Handler()
+	for _, path := range []string{"/accounts/" + wire.EncodeB64u(id(1)), "/devices/" + wire.EncodeB64u(id(3))} {
+		rec := httptest.NewRecorder()
+		none.ServeHTTP(rec, httptest.NewRequest("DELETE", path, nil))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s without the API server: %d", path, rec.Code)
+		}
 	}
 }

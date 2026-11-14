@@ -34,7 +34,7 @@ import (
 var schema embed.FS
 
 // schemaVersion is the version this server's code reads and writes.
-const schemaVersion = 4
+const schemaVersion = 5
 
 // readers is how many connections may read at once.
 const readers = 4
@@ -280,19 +280,41 @@ func deleteOne(res sql.Result, err error) error {
 
 // ---- accounts, devices, challenges, sessions ----
 
+const accountCols = `id, ik, chain, operator, created_at, nickname`
+
+func scanAccount(row interface{ Scan(...any) error }) (store.Account, error) {
+	var v store.Account
+	var created int64
+	err := row.Scan(&v.ID, &v.IK, &v.Chain, &v.Operator, &created, &v.Nickname)
+	v.CreatedAt, v.Chain = uint64(created), nilIfEmpty(v.Chain)
+	return v, notFound(err)
+}
+
 func (t *tx) PutAccount(v store.Account) error {
-	_, err := t.q.Exec(`INSERT OR REPLACE INTO accounts (id, ik, chain, operator, created_at) VALUES (?, ?, ?, ?, ?)`,
-		v.ID, v.IK, nilIfEmpty(v.Chain), v.Operator, i64(v.CreatedAt))
+	_, err := t.q.Exec(`INSERT OR REPLACE INTO accounts (`+accountCols+`) VALUES (?, ?, ?, ?, ?, ?)`,
+		v.ID, v.IK, nilIfEmpty(v.Chain), v.Operator, i64(v.CreatedAt), v.Nickname)
 	return err
 }
 
 func (t *tx) Account(id []byte) (store.Account, error) {
-	var v store.Account
-	var created int64
-	err := t.q.QueryRow(`SELECT id, ik, chain, operator, created_at FROM accounts WHERE id = ?`, id).
-		Scan(&v.ID, &v.IK, &v.Chain, &v.Operator, &created)
-	v.CreatedAt, v.Chain = uint64(created), nilIfEmpty(v.Chain)
-	return v, notFound(err)
+	return scanAccount(t.q.QueryRow(`SELECT `+accountCols+` FROM accounts WHERE id = ?`, id))
+}
+
+func (t *tx) Accounts() ([]store.Account, error) {
+	rows, err := t.q.Query(`SELECT ` + accountCols + ` FROM accounts ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.Account
+	for rows.Next() {
+		v, err := scanAccount(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }
 
 func (t *tx) DeleteAccount(id []byte) error {
@@ -300,19 +322,19 @@ func (t *tx) DeleteAccount(id []byte) error {
 	return err
 }
 
-const deviceCols = `id, account, kind, dsk, cert, bundle, created_at, last_seen_at`
+const deviceCols = `id, account, kind, dsk, cert, bundle, created_at, last_seen_at, nickname`
 
 func scanDevice(row interface{ Scan(...any) error }) (store.Device, error) {
 	var v store.Device
 	var created, seen int64
-	err := row.Scan(&v.ID, &v.Account, &v.Kind, &v.DSK, &v.Cert, &v.Bundle, &created, &seen)
+	err := row.Scan(&v.ID, &v.Account, &v.Kind, &v.DSK, &v.Cert, &v.Bundle, &created, &seen, &v.Nickname)
 	v.CreatedAt, v.LastSeenAt, v.Bundle = uint64(created), uint64(seen), nilIfEmpty(v.Bundle)
 	return v, notFound(err)
 }
 
 func (t *tx) PutDevice(v store.Device) error {
-	_, err := t.q.Exec(`INSERT OR REPLACE INTO devices (`+deviceCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		v.ID, v.Account, v.Kind, v.DSK, v.Cert, nilIfEmpty(v.Bundle), i64(v.CreatedAt), i64(v.LastSeenAt))
+	_, err := t.q.Exec(`INSERT OR REPLACE INTO devices (`+deviceCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		v.ID, v.Account, v.Kind, v.DSK, v.Cert, nilIfEmpty(v.Bundle), i64(v.CreatedAt), i64(v.LastSeenAt), v.Nickname)
 	return err
 }
 
@@ -527,6 +549,35 @@ func (t *tx) SeqOf(circle, hash []byte) (int64, bool, error) {
 
 func (t *tx) CirclesOf(account []byte) ([]store.Circle, error) {
 	rows, err := t.q.Query(`SELECT circle FROM members WHERE account = ? ORDER BY circle`, account)
+	if err != nil {
+		return nil, err
+	}
+	var ids [][]byte
+	for rows.Next() {
+		var id []byte
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]store.Circle, 0, len(ids))
+	for _, id := range ids {
+		c, err := t.Circle(id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+func (t *tx) Circles() ([]store.Circle, error) {
+	rows, err := t.q.Query(`SELECT id FROM circles ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}

@@ -164,6 +164,15 @@ func (t *tx) PutAccount(v store.Account) error         { set(t, t.s.accounts, st
 func (t *tx) Account(id []byte) (store.Account, error) { return get(t.s.accounts, id) }
 func (t *tx) DeleteAccount(id []byte) error            { del(t, t.s.accounts, string(id)); return nil }
 
+func (t *tx) Accounts() ([]store.Account, error) {
+	out := make([]store.Account, 0, len(t.s.accounts))
+	for _, a := range t.s.accounts {
+		out = append(out, a)
+	}
+	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i].ID, out[j].ID) < 0 })
+	return out, nil
+}
+
 func (t *tx) PutDevice(v store.Device) error         { set(t, t.s.devices, string(v.ID), v); return nil }
 func (t *tx) Device(id []byte) (store.Device, error) { return get(t.s.devices, id) }
 func (t *tx) DeleteDevice(id []byte) error           { del(t, t.s.devices, string(id)); return nil }
@@ -278,6 +287,15 @@ func (t *tx) CirclesOf(account []byte) ([]store.Circle, error) {
 		if l.c.State.Member(account) != nil {
 			out = append(out, l.c)
 		}
+	}
+	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i].ID, out[j].ID) < 0 })
+	return out, nil
+}
+
+func (t *tx) Circles() ([]store.Circle, error) {
+	out := make([]store.Circle, 0, len(t.s.circles))
+	for _, l := range t.s.circles {
+		out = append(out, l.c)
 	}
 	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i].ID, out[j].ID) < 0 })
 	return out, nil

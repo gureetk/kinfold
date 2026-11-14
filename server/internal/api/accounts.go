@@ -164,29 +164,62 @@ func (s *Server) deleteAccount(q *request) error {
 		if err := s.session(q, tx, phone); err != nil {
 			return err
 		}
-		circles, err := tx.CirclesOf(q.dev.Account)
-		if err != nil {
-			return err
-		}
-		if len(circles) > 0 {
-			return &apiError{status: http.StatusConflict, code: "still_member", msg: "leave every circle first"}
-		}
-		devs, err := tx.DevicesOf(q.dev.Account)
-		if err != nil {
-			return err
-		}
-		for _, d := range devs {
-			if err := s.forgetDevice(q, tx, d.ID); err != nil {
-				return err
-			}
-		}
-		return tx.DeleteAccount(q.dev.Account)
+		return s.forgetAccount(q, tx, q.dev.Account)
 	})
 	if err != nil {
 		return err
 	}
 	q.w.WriteHeader(http.StatusNoContent)
 	return nil
+}
+
+// ErrStillMember refuses to delete an account that is in a circle (API.md §5).
+var ErrStillMember error = &apiError{status: http.StatusConflict, code: "still_member", msg: "leave every circle first"}
+
+// forgetAccount deletes an account that is in no circle, with its devices.
+func (s *Server) forgetAccount(q *request, tx store.Tx, account []byte) error {
+	circles, err := tx.CirclesOf(account)
+	if err != nil {
+		return err
+	}
+	if len(circles) > 0 {
+		return ErrStillMember
+	}
+	devs, err := tx.DevicesOf(account)
+	if err != nil {
+		return err
+	}
+	for _, d := range devs {
+		if err := s.forgetDevice(q, tx, d.ID); err != nil {
+			return err
+		}
+	}
+	return tx.DeleteAccount(account)
+}
+
+// RemoveDevice is the operator's removal of a device (API.md §16). Its sessions, push
+// registration and stream end at once; the circles' logs don't change. It is
+// store.ErrNotFound for a device the server doesn't know.
+func (s *Server) RemoveDevice(id []byte) error {
+	q := &request{now: s.cfg.Clock.Now()}
+	return s.update(q, func(tx store.Tx) error {
+		if _, err := tx.Device(id); err != nil {
+			return err
+		}
+		return s.forgetDevice(q, tx, id)
+	})
+}
+
+// RemoveAccount is the operator's removal of an account, refused with ErrStillMember while
+// it is in a circle. Its devices go as RemoveDevice removes them.
+func (s *Server) RemoveAccount(id []byte) error {
+	q := &request{now: s.cfg.Clock.Now()}
+	return s.update(q, func(tx store.Tx) error {
+		if _, err := tx.Account(id); err != nil {
+			return err
+		}
+		return s.forgetAccount(q, tx, id)
+	})
 }
 
 // forgetDevice deregisters a device and ends its sessions, and its stream with them.

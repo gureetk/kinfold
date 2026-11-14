@@ -47,6 +47,7 @@ type Account struct {
 	Chain     []byte // the identity chain that leads to it
 	Operator  bool
 	CreatedAt uint64
+	Nickname  string // a label only the operator sees (API.md §16)
 }
 
 // Device is a registered device.
@@ -59,6 +60,7 @@ type Device struct {
 	Bundle     []byte // nil for a recovery device
 	CreatedAt  uint64
 	LastSeenAt uint64
+	Nickname   string // a label only the operator sees (API.md §16)
 }
 
 // Challenge is a login challenge (§13.2), used once.
@@ -178,6 +180,8 @@ type Tx interface {
 
 	PutAccount(Account) error
 	Account(id []byte) (Account, error)
+	// Accounts lists every account, by ID.
+	Accounts() ([]Account, error)
 	DeleteAccount(id []byte) error
 
 	PutDevice(Device) error
@@ -207,6 +211,8 @@ type Tx interface {
 	SeqOf(circle, hash []byte) (int64, bool, error)
 	// CirclesOf lists the circles in which the account is a member.
 	CirclesOf(account []byte) ([]Circle, error)
+	// Circles lists every circle, closed ones too, by ID.
+	Circles() ([]Circle, error)
 	PutRemoval(Removal) error
 	Removal(circle, device []byte) (Removal, error)
 
