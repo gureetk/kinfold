@@ -21,6 +21,7 @@ import (
 	"github.com/gureetk/kinfold/server/internal/clock"
 	"github.com/gureetk/kinfold/server/internal/identity"
 	"github.com/gureetk/kinfold/server/internal/store"
+	"github.com/gureetk/kinfold/server/internal/tiles"
 	"github.com/gureetk/kinfold/server/internal/wire"
 )
 
@@ -75,6 +76,8 @@ type Config struct {
 	Stream StreamTimes
 	// Push is how the server reaches push hosts (API.md §12).
 	Push PushConfig
+	// Tiles are the map files on offer (API.md §13); none if nil.
+	Tiles *tiles.Library
 }
 
 // Server is the HTTP API.
@@ -154,6 +157,9 @@ func (s *Server) routes() {
 	h("GET /v1/stream", s.openStream)
 	h("PUT /v1/push", s.putPush)
 	h("DELETE /v1/push", s.deletePush)
+
+	h("GET /v1/tiles", s.listTiles)
+	h("GET /tiles/{file}", s.tileFile)
 
 	h("PUT /v1/circles/{id}/watches/{device_id}", s.putWatch)
 	h("GET /v1/circles/{id}/watches", s.listWatches)
