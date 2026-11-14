@@ -2135,19 +2135,21 @@ export async function buildServerMove(oldSigner, { old_url, new_url, new_key, is
 // §14 Silence watches, wake-ups and push
 // ---------------------------------------------------------------------------
 
-export const WATCH_GRANT_LEN = 123;
+export const WATCH_GRANT_LEN = 131;
+const GRANT_TBS_LEN = 67;
 const GRANT_MAX_MS = 35n * 86400000n;
+const GRANT_SKEW_MS = 600000n; // how far issued_at may run ahead of the server's clock
 
 export function parseWatchGrant(bytes) {
   const r = new Reader(bytes);
   const g = { raw: bytes.slice(), version: r.u8(), circle_id: r.bytes(16), watched_device_id: r.bytes(16),
-    watcher_account_id: r.bytes(16), after_min: r.u16(), not_after: r.u64(), sig: r.bytes(64) };
+    watcher_account_id: r.bytes(16), after_min: r.u16(), issued_at: r.u64(), not_after: r.u64(), sig: r.bytes(64) };
   r.end();
   return g;
 }
 
-export async function buildWatchGrant(dskSigner, { circle_id, watched_device_id, watcher_account_id, after_min, not_after }) {
-  const body = concat(u8(0), circle_id, watched_device_id, watcher_account_id, u16(after_min), u64(not_after));
+export async function buildWatchGrant(dskSigner, { circle_id, watched_device_id, watcher_account_id, after_min, issued_at, not_after }) {
+  const body = concat(u8(0), circle_id, watched_device_id, watcher_account_id, u16(after_min), u64(issued_at), u64(not_after));
   return concat(body, await sign(dskSigner, 'watch-grant', body));
 }
 
@@ -2161,8 +2163,9 @@ export async function watchGrantValid(bytes, state, now) {
     && !!f && isPhoneOrTablet(f.device.kind)
     && state.members.has(toHex(g.watcher_account_id))
     && g.after_min >= 15 && g.after_min <= 1440
-    && t < g.not_after && g.not_after <= t + GRANT_MAX_MS
-    && await verify(f.device.dsk_pub, 'watch-grant', bytes.slice(0, 59), g.sig);
+    && g.issued_at <= t + GRANT_SKEW_MS
+    && t < g.not_after && g.issued_at < g.not_after && g.not_after <= g.issued_at + GRANT_MAX_MS
+    && await verify(f.device.dsk_pub, 'watch-grant', bytes.slice(0, GRANT_TBS_LEN), g.sig);
 }
 
 // §14.2 Push messages

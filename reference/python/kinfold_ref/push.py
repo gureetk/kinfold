@@ -4,8 +4,9 @@ from .crypto import VERSION, H, hpke_open, hpke_seal, sign, verify
 from .encoding import DecodeError, Reader, pad_to, u8, u16, u32, u64, unpad, vec16
 from .identity import DAY_MS, PHONE, TABLET, key_id
 
-GRANT_TBS_LEN, GRANT_LEN = 59, 123
+GRANT_TBS_LEN, GRANT_LEN = 67, 131
 GRANT_MAX_MS = 35 * DAY_MS
+GRANT_SKEW_MS = 600_000                  # how far issued_at may run ahead of the server's clock
 AFTER_MIN_RANGE = (15, 1440)
 WAKE, RECORDS, SILENCE = 1, 2, 3
 PUSH_PLAIN, PUSH_SEALED, PUSH_BODY_MAX = 2560, 2616, 2483
@@ -16,15 +17,16 @@ DELIVERY = {"alert": 1, "background": 2, "location": 3}
 # --- watch grants (14.1) ---------------------------------------------------------------------
 
 def make_watch_grant(dsk_seed: bytes, circle_id: bytes, watched_device_id: bytes, watcher_account_id: bytes,
-                     after_min: int, not_after: int) -> bytes:
-    tbs = u8(VERSION) + circle_id + watched_device_id + watcher_account_id + u16(after_min) + u64(not_after)
+                     after_min: int, issued_at: int, not_after: int) -> bytes:
+    tbs = (u8(VERSION) + circle_id + watched_device_id + watcher_account_id + u16(after_min) + u64(issued_at)
+           + u64(not_after))
     return tbs + sign(dsk_seed, "watch-grant", tbs)
 
 
 def parse_watch_grant(raw: bytes) -> dict:
     r = Reader(raw)
     d = dict(version=r.u8(), circle_id=r.take(16), watched_device_id=r.take(16), watcher_account_id=r.take(16),
-             after_min=r.u16(), not_after=r.u64(), sig=r.take(64))
+             after_min=r.u16(), issued_at=r.u64(), not_after=r.u64(), sig=r.take(64))
     r.end()
     return d
 
@@ -40,7 +42,9 @@ def watch_grant_ok(raw: bytes, state, now: int) -> bool:
             and dev is not None and dev.kind in (PHONE, TABLET)
             and g["watcher_account_id"] in state.members
             and AFTER_MIN_RANGE[0] <= g["after_min"] <= AFTER_MIN_RANGE[1]
-            and now < g["not_after"] <= now + GRANT_MAX_MS
+            and g["issued_at"] <= now + GRANT_SKEW_MS
+            and now < g["not_after"]
+            and g["issued_at"] < g["not_after"] <= g["issued_at"] + GRANT_MAX_MS
             and verify(dev.dsk_pub, "watch-grant", raw[:GRANT_TBS_LEN], g["sig"]))
 
 

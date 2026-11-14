@@ -111,7 +111,7 @@ Each has `direction`, `link`, `code_text` (`KFL0…`), `secret`, `link_id`, `lin
 
 ### `watch_grants` and `push`
 
-- `watch_grants`: `grants`, each a 123-byte `grant` and whether it is `valid` at the time `now` against the main log through `log_seq`. `fields` are the fields of the first grant.
+- `watch_grants`: `grants`, each a 131-byte `grant` and whether it is `valid` at the time `now` against the main log through `log_seq`. `fields` are the fields of the first grant, `issued_at` among them.
 - `push.valid`: for `device`, the `push` (type, `sent_at`, `body`, signed with the server key `push.server_key`), the HPKE `ikm` and the 2,616-byte `sealed` form, opened at the device's trusted time `now` with `keys`. `push.invalid`: sealed pushes the device must drop. `push.relay`: a relay signature over `capability`, `sealed`, `sent_at` and `delivery`.
 
 ## Not in the file

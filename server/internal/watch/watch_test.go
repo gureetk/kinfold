@@ -26,18 +26,18 @@ func TestWatchGrants(t *testing.T) {
 	if !ok || hex.EncodeToString(g.CircleID) != tv.Str(f["circle_id"]) ||
 		hex.EncodeToString(g.WatchedDevice) != tv.Str(f["watched_device_id"]) ||
 		hex.EncodeToString(g.WatcherAccount) != tv.Str(f["watcher_account_id"]) ||
-		uint64(g.AfterMin) != tv.Num(f["after_min"]) || g.NotAfter != tv.Num(f["not_after"]) {
+		uint64(g.AfterMin) != tv.Num(f["after_min"]) || g.IssuedAt != tv.Num(f["issued_at"]) ||
+		g.NotAfter != tv.Num(f["not_after"]) {
 		t.Error("fields of the first grant")
 	}
-	// The grant is valid exactly while now < not_after ≤ now + 35 days.
-	if _, ok := watch.Valid(s, first, g.NotAfter); ok {
-		t.Error("valid at not_after")
-	}
-	if _, ok := watch.Valid(s, first, g.NotAfter-watch.MaxLifeMS-1); ok {
-		t.Error("valid more than 35 days before not_after")
-	}
-	if _, ok := watch.Valid(s, first, g.NotAfter-watch.MaxLifeMS); !ok {
-		t.Error("not valid exactly 35 days before not_after")
+	// The grant is valid from 10 minutes before its issued_at until not_after.
+	for _, c := range []struct {
+		now  uint64
+		want bool
+	}{{g.IssuedAt - watch.SkewMS - 1, false}, {g.IssuedAt - watch.SkewMS, true}, {g.NotAfter - 1, true}, {g.NotAfter, false}} {
+		if _, ok := watch.Valid(s, first, c.now); ok != c.want {
+			t.Errorf("valid %v at %d ms from issued_at", ok, int64(c.now-g.IssuedAt))
+		}
 	}
 }
 
@@ -52,7 +52,8 @@ func FuzzGrant(f *testing.F) {
 		if g, ok := watch.Parse(raw); ok && len(g.Raw) != watch.GrantLen {
 			t.Fatal("a grant parsed from the wrong number of bytes")
 		}
-		if g, ok := watch.Valid(s, raw, now); ok && (g.AfterMin < watch.MinAfterMin || g.NotAfter <= now) {
+		if g, ok := watch.Valid(s, raw, now); ok && (g.AfterMin < watch.MinAfterMin || g.NotAfter <= now ||
+			g.NotAfter <= g.IssuedAt || g.NotAfter-g.IssuedAt > watch.MaxLifeMS) {
 			t.Fatal("an impossible grant was valid")
 		}
 	})

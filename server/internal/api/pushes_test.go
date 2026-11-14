@@ -224,7 +224,7 @@ func TestPushSilence(t *testing.T) {
 	l.registerRelay(maya, "maya-notify", "maya-locate")
 	l.registerRelay(jordan, "jordan-notify", "")
 	start := l.clk.Now()
-	if r := l.putWatch(jordan, maya, grant(maya, l.cid, jordan.account, 15, start+1440*minute)); r.code != http.StatusNoContent {
+	if r := l.putWatch(jordan, maya, grant(maya, l.cid, jordan.account, 15, start, start+1440*minute)); r.code != http.StatusNoContent {
 		t.Fatalf("watch: %d", r.code)
 	}
 	l.clk.Set(start + 15*minute)

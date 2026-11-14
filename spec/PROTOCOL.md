@@ -1194,23 +1194,25 @@ A server that moves to a new address, or replaces its key, serves a `ServerMove`
 A silence watch asks the server to tell a watcher when a phone goes quiet. The server sees only arrival times.
 
 ```text
-struct WatchGrant {                 // 123 bytes
+struct WatchGrant {                 // 131 bytes
   u8    version = 0;
   bytes circle_id[16];
   bytes watched_device_id[16];
   bytes watcher_account_id[16];
   u16   after_min;                  // 15–1440: how long a silence must last before the watcher is told
-  u64   not_after;                  // at most 35 days after it is signed
-  bytes sig[64];                    // Sign(watched device's DSK, "watch-grant", the first 59 bytes)
+  u64   issued_at;                  // the watched device's trusted time (§8.4) when it signs
+  u64   not_after;                  // at most 35 days after issued_at
+  bytes sig[64];                    // Sign(watched device's DSK, "watch-grant", the first 67 bytes)
 }
 ```
 
-- **Consent is a signature.** The server registers a watch only with a grant that is valid, which it checks against the log, and it never alerts sooner than the grant's `after_min`. A grant is **valid** at a time `t` when `version` is 0, `circle_id` is the circle's, `watched_device_id` is an active phone or tablet, `watcher_account_id` is a current member, `after_min` is 15 to 1440, `t < not_after ≤ t + 35 days` (3,024,000,000 ms), and `sig` verifies under the watched device's DSK. A watch ends when its grant stops being valid. A teen's phones issue grants to each guardian without being asked, with `after_min` set to the `silence_alert_min` of the teen's rules: when they join, when their guardians or that rule change, and every 7 days. (A rule of 0 means no watch.) An adult's phone issues one only when the person agrees, with the interval they agreed to, and the person can end it at any time (API.md). Grants travel as `watch_grant` payloads (§8.2).
+- **Consent is a signature.** The server registers a watch only with a grant that is valid, which it checks against the log, and it never alerts sooner than the grant's `after_min`. A grant is **valid** at a time `t` when `version` is 0, `circle_id` is the circle's, `watched_device_id` is an active phone or tablet, `watcher_account_id` is a current member, `after_min` is 15 to 1440, `issued_at ≤ t + 10 minutes` (600,000 ms), `t < not_after`, `issued_at < not_after ≤ issued_at + 35 days` (3,024,000,000 ms), and `sig` verifies under the watched device's DSK. A watch ends when its grant stops being valid. A teen's phones issue grants to each guardian without being asked, with `after_min` set to the `silence_alert_min` of the teen's rules: when they join, when their guardians or that rule change, and every 7 days. (A rule of 0 means no watch.) An adult's phone issues one only when the person agrees, with the interval they agreed to, and the person can end it at any time (API.md). Grants travel as `watch_grant` payloads (§8.2).
 - **Per phone.** A watch covers one device. A guardian's app registers a watch for every phone and tablet a teen shares from, and alerts the guardian when one of a teen's phones has issued no valid grant, or one whose interval isn't the rule's, or when the server reports that a watch has ended.
 - **What counts.** A watch is reset only when the watched device stores a circle envelope, which §7.5 forces to be addressed to every receiving device. Direct envelopes and log entries don't count.
 - **Before alerting**, the server SHOULD try to wake the watched device (§14.3) and wait two minutes, so that a phone that was only asleep answers with a heartbeat.
 - **The alert** is a push of type `silence` (§14.2) to the watcher account's phones and tablets. Names are filled in from the watcher's own records.
 - **No hidden watches.** Any member can ask the server which watches name their devices and who holds them (API.md).
+- **Ending a watch.** The watched person can end a watch on their device at any time (API.md). `issued_at` is what makes that last: the server refuses every grant issued before the watch was ended, so the watcher can't bring it back with a grant it kept, and it takes the next grant the device issues. A grant runs out at most 35 days after it was issued, so the server need only remember an ending for 35 days.
 
 The server decides when a watch fires, so a server run by the watched person, or a compromised one, can stay silent. That is why guardians' clients also keep their own timers (§8.4).
 
@@ -1477,7 +1479,7 @@ Lessons from the independent WebCrypto implementation (`reference/js`), which al
 - **QR codes.** A link code is about 200 characters and an invite for an adult about 350. An invite for a teen with a full schedule, or a recovery kit after several rotations, can pass 1,000: use byte mode, low error correction, and test on small screens. Scan with a library that runs on the device.
 - **Trusted time** (§8.4) needs a clock that keeps counting while the phone sleeps and a way to notice a restart. Store the server time and that clock's reading together; a reading lower than the stored one means the phone restarted.
 - **Fixed sizes.** `details` (540), sealed pushes (2,616) and delivery records are compared by length before anything is parsed.
-- **Times are compared by subtraction.** `sent_at`, `created_at`, `not_before` and `not_after` are `u64` values their author chooses. In a language with fixed-width integers, a check written as `sent_at + 31 days < now` wraps around for a `sent_at` near the end of the range and gives `expired` where the rule gives `bad_time`. Write each limit as a difference of two values, taken only when the first is the larger. The vectors hold an entry, its key bundle and an envelope at the top of the range (`accepted_bundle_at_end_of_time`, `bad_time_end_of_time`).
+- **Times are compared by subtraction.** `sent_at`, `created_at`, `issued_at`, `not_before` and `not_after` are `u64` values their author chooses. In a language with fixed-width integers, a check written as `sent_at + 31 days < now` wraps around for a `sent_at` near the end of the range and gives `expired` where the rule gives `bad_time`. Write each limit as a difference of two values, taken only when the first is the larger. The vectors hold an entry, its key bundle and an envelope at the top of the range (`accepted_bundle_at_end_of_time`, `bad_time_end_of_time`).
 - **Safety codes** take about 70 ms in a browser (5,200 SHA-512 calls); WebCrypto requires a secure context.
 
 ## Appendix D. Changes since draft 0.2
@@ -1511,6 +1513,6 @@ Draft 0.3 applies the design review of November 2026. Nothing from draft 0.2 can
 | Safety codes | 60 digits | 11 |
 | Share links | What they trust is stated; apps open them without the server's page | 12 |
 | Server | Setup codes; single-use login challenges; `ServerMove` | 13 |
-| Watches | Per device, with a signed grant from the watched device; only circle envelopes count; listable | 14.1 |
+| Watches | Per device, with a signed grant from the watched device; only circle envelopes count; listable; grants carry their time of issue, so an ended watch stays ended | 14.1 |
 | Push | One sealed, signed, fixed-size format; wake-up values; relay capability bound to the server's key | 14.2–14.4 |
 | Registries | Device kind 5; new labels and reason codes; limits; options and features | 16 |

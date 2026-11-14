@@ -972,14 +972,15 @@ func envelopeCheck(s *state, raw []byte, seen map[string][32]byte, now uint64) s
 func watchGrantOK(s *state, raw []byte, now uint64) bool {
 	r := &reader{b: raw}
 	ver, cid, watched, watcher := r.u8(), r.take(16), r.take(16), r.take(16)
-	afterMin, notAfter, sig := r.u16(), r.u64(), r.take(64)
+	afterMin, issuedAt, notAfter, sig := r.u16(), r.u64(), r.u64(), r.take(64)
 	if !r.ok() {
 		return false
 	}
 	d := s.device(watched)
 	return ver == 0 && bytes.Equal(cid, s.cid) && d != nil && (d.kind == kindPhone || d.kind == kindTablet) &&
 		s.members[string(watcher)] != nil && afterMin >= 15 && afterMin <= 1440 &&
-		now < notAfter && notAfter-now <= 35*86_400_000 && verify(d.dsk, "watch-grant", raw[:59], sig)
+		(issuedAt <= now || issuedAt-now <= 600_000) && now < notAfter &&
+		issuedAt < notAfter && notAfter-issuedAt <= 35*86_400_000 && verify(d.dsk, "watch-grant", raw[:67], sig)
 }
 
 // makePush builds the Push structure of §14.2; seed is the server's signing key.
