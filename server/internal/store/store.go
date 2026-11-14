@@ -140,6 +140,20 @@ type Watch struct {
 	Revoked bool
 }
 
+// Share is a share link (API.md §11): the latest update of a live location, sealed under a
+// key that only the link's fragment holds.
+type Share struct {
+	ID        []byte
+	Account   []byte
+	Device    []byte // the creating device, the only one that may post updates
+	ExpiresAt uint64
+	Update    []byte // the latest ShareUpdate; nil before the first and once deleted
+	Seq       uint64 // its seq
+	Views     int
+	LastView  uint64
+	Ended     bool // deleted: kept, empty, until ExpiresAt, to answer 410
+}
+
 // Tx is a transaction.
 type Tx interface {
 	Settings() (Settings, error)
@@ -210,13 +224,18 @@ type Tx interface {
 	// LastHeard is when the device last stored a circle envelope, if the store knows.
 	LastHeard(circle, device []byte) (uint64, bool, error)
 
+	PutShare(Share) error
+	Share(id []byte) (Share, error)
+	// SharesOf lists the share links a device made, by ID.
+	SharesOf(device []byte) ([]Share, error)
+
 	// Sweep deletes what has run out by now (API.md §15) and counts what it deleted.
 	Sweep(now uint64, r Retention) (Swept, error)
 }
 
 // Retention is how long the server keeps what has ended, in milliseconds. Everything else
-// goes when it expires: challenges, sessions, tokens, envelopes, replay records and revoked
-// watches. (Watches that are still active end in the silence check, which tells the watcher.)
+// goes when it expires: challenges, sessions, tokens, envelopes, replay records, share
+// links and revoked watches. (Watches that are still active end in the silence check, which tells the watcher.)
 type Retention struct {
 	Removals      uint64 // a removed device may read the log for this long (API.md §6)
 	Results       uint64 // a join result, after it is written (§9)
@@ -225,5 +244,5 @@ type Retention struct {
 
 // Swept counts what a sweep deleted.
 type Swept struct {
-	Challenges, Sessions, Tokens, Envelopes, Seen, Removals, Invites, Watches, Circles int
+	Challenges, Sessions, Tokens, Envelopes, Seen, Removals, Invites, Watches, Shares, Circles int
 }

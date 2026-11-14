@@ -1,6 +1,6 @@
 # Kinfold HTTP API, version 0
 
-**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §10 and the part of §16 that a first device needs. Until push (§12) is in, it wakes no device, and silence alerts reach only devices with a stream open; `stream_post` isn't offered.
+**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §11 and the part of §16 that a first device needs; the viewer page shows a position as text until the map of §13 is in. Until push (§12) is in, it wakes no device, and silence alerts reach only devices with a stream open; `stream_post` isn't offered.
 **License:** [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 Section numbers written "spec §…" point into PROTOCOL.md. Where the two documents disagree about bytes, the spec wins.
@@ -70,6 +70,7 @@ Errors are JSON: `{"error": "<code>", "message": "<text for developers>"}` plus 
 | 409 | `still_member` | Deleting an account that is still in a circle |
 | 409 | `already_registered` | Registering an account or device that is already registered |
 | 409 | `stale_grant` | A watch grant no newer than the one registered, or than one the watched account deleted (§8) |
+| 409 | `stale_update` | A share update whose `seq` isn't above the one the server keeps (§11) |
 | 410 | `gone` | An invite, link mailbox or share link that has ended |
 | 413 | `too_large` | A body over the endpoint's limit (§3) |
 | 422 | `bad_grant` | A watch grant that isn't valid (spec §14.1), or whose IDs aren't the path's |
@@ -352,9 +353,12 @@ The server can read none of the messages. Knowing `link_id` is what lets the new
 | `GET /v1/shares/{link_id}/latest?after={seq}&wait={s}` | — | — | 200 with the newest `ShareUpdate`, 204 when none is newer than `after`, 410 once the link has ended |
 | `GET /s/{link_id}` | — | — | The viewer page |
 
-- A link lasts at most 24 hours. The server keeps only the update with the highest `seq`.
-- **Views.** The server counts page loads per link and tells the creating device with a `share_view` event, so the person sharing sees that the link was opened. It stores no addresses.
-- **The viewer page** is the same static page for every link; the key never leaves the part of the URL after `#`. It is served with a content security policy that allows scripts, styles, workers and connections from this server only, and with `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff` and `frame-ancestors 'none'`. Its map comes from the coarse archive (§13).
+- **Making a link.** A link lasts at most 24 hours (400 otherwise). A device has at most 5 open (429). A `link_id` in use is 409 `slot_taken`; the same link posted again is 201.
+- **Updates.** Only the device that made the link posts them (403). The server checks what it can see: version 0, the link's ID, a `seq`, the link's own `expires_at`, a nonce and a ciphertext, and nothing after (422 `malformed`). It keeps only the update with the highest `seq`: the same bytes again succeed, a lower or equal `seq` is 409 `stale_update`. One update every 5 seconds (429). An ended link answers 410 to every call about it.
+- **The viewer's call**, `latest`, needs no session but sends `Kinfold-Api` like any `/v1/` call; it waits up to 25 seconds (`wait`). An unknown link is 404.
+- **Ending.** `DELETE` ends a link at once and drops its update; `GET /v1/shares/{link_id}` and `DELETE` from another account are 403.
+- **Views.** The server counts page loads per link, at most 60 a minute, and tells the creating device with a `share_view` event, so the person sharing sees that the link was opened. Loads of an ended link don't count. It stores no addresses. `last_view_at` is 0 before the first view.
+- **The viewer page** is the same static page for every link, whatever the ID, with its script and styles under `/assets/`; the key never leaves the part of the URL after `#`. It is served with a content security policy that allows scripts, styles, workers and connections from this server only, and with `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff` and `frame-ancestors 'none'`. Its map comes from the coarse archive (§13).
 - What a share link trusts is in spec §12. The app says so when a link is made.
 
 ---
@@ -455,7 +459,7 @@ It enforces:
 - who may call what: the **Who** columns here, which repeat for the API what spec §6.3 says about device kinds for the log;
 - the limits of §3.
 
-What has run out is refused at once and deleted by a sweep every hour:
+What has run out is refused at once and deleted by a sweep every minute:
 
 - envelopes at the end of their time-to-live, and its record of each `(sender, seq)` pair 32 days after the envelope was sent;
 - login challenges, sessions and registration tokens when they expire;
@@ -463,7 +467,7 @@ What has run out is refused at once and deleted by a sweep every hour:
 - a removed device's access to the log after 30 days (§6);
 - watches the watched account deleted, when their grant would have run out (§8);
 - closed circles 30 days after their last member left, with everything that names them;
-- link mailboxes within minutes, and share links within 24 hours.
+- link mailboxes within a minute of ending, and share links when they expire, at most 24 hours after they were made (§10, §11).
 
 A silence check runs once a minute.
 
