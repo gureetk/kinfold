@@ -1234,7 +1234,7 @@ sealed  = key_id[8] ‖ enc[32] ‖ ct                     // always 2,616 bytes
 | Type | Body | The device then |
 | --- | --- | --- |
 | 1 `wake` | Empty | Connects and fetches its inbox |
-| 2 `records` | One or more delivery records, each `u32 length ‖ u64 received_at ‖ envelope` | Handles them as if it had fetched them. The server uses this form whenever the waiting records fit |
+| 2 `records` | One or more delivery records (API.md §7), each `u32 length ‖ u64 received_at ‖ envelope`, where the length counts `received_at` and the envelope | Handles them as if it had fetched them. The server uses this form whenever the waiting records fit |
 | 3 `silence` | `circle_id[16] ‖ watched_device_id[16] ‖ u64 last_seen_at` | Shows the silence alert |
 
 A device MUST check `sig` against its server's key and MUST drop a push whose `sent_at` is more than 10 minutes from its trusted time (§8.4). It also drops, without telling anyone, a push that isn't 2,616 bytes, that doesn't open or unpad, whose type it doesn't know, or whose body doesn't fit its type: a `wake` with a body, `records` with none, a `silence` of another length. Every push is the same size, so the relay, Apple or a UnifiedPush distributor can't tell the types apart.
@@ -1476,6 +1476,7 @@ Lessons from the independent WebCrypto implementation (`reference/js`), which al
 - **QR codes.** A link code is about 200 characters and an invite for an adult about 350. An invite for a teen with a full schedule, or a recovery kit after several rotations, can pass 1,000: use byte mode, low error correction, and test on small screens. Scan with a library that runs on the device.
 - **Trusted time** (§8.4) needs a clock that keeps counting while the phone sleeps and a way to notice a restart. Store the server time and that clock's reading together; a reading lower than the stored one means the phone restarted.
 - **Fixed sizes.** `details` (540), sealed pushes (2,616) and delivery records are compared by length before anything is parsed.
+- **Times are compared by subtraction.** `sent_at`, `created_at`, `not_before` and `not_after` are `u64` values their author chooses. In a language with fixed-width integers, a check written as `sent_at + 31 days < now` wraps around for a `sent_at` near the end of the range and gives `expired` where the rule gives `bad_time`. Write each limit as a difference of two values, taken only when the first is the larger.
 - **Safety codes** take about 70 ms in a browser (5,200 SHA-512 calls); WebCrypto requires a secure context.
 
 ## Appendix D. Changes since draft 0.2
