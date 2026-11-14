@@ -5,7 +5,7 @@
 //	kinfold serve --url https://kinfold.example.org [--listen 127.0.0.1:8080] [--data DIR]
 //	              [--tls-cert FILE --tls-key FILE] [--no-clock-check]
 //	              [--relay https://relay.example] [--push-hosts HOST,…] [--push-hosts-only]
-//	              [--no-webpush]
+//	              [--no-webpush] [--search http://127.0.0.1:2322]
 //
 // serve keeps everything in DIR: the server key (server.key), the Web Push key (vapid.key),
 // the database (kinfold.db, with its -wal and -shm files), the map files (tiles/) and the
@@ -98,6 +98,7 @@ func serve(args []string) error {
 	pushHosts := fs.String("push-hosts", "", "Web Push hosts allowed without the public-address check, comma-separated")
 	pushHostsOnly := fs.Bool("push-hosts-only", false, "send Web Push only to the hosts in --push-hosts")
 	noWebPush := fs.Bool("no-webpush", false, "take no Web Push (UnifiedPush) registrations; Android phones then rely on their stream")
+	search := fs.String("search", "", "the search add-on: a Photon instance's base URL, such as http://127.0.0.1:2322; without it, no search")
 	fs.Parse(args)
 	privateFiles()
 	if !strings.HasPrefix(*url, "https://") || strings.HasSuffix(*url, "/") {
@@ -105,6 +106,10 @@ func serve(args []string) error {
 	}
 	if *relay != "" && (!strings.HasPrefix(*relay, "https://") || strings.HasSuffix(*relay, "/")) {
 		return errors.New("--relay must be an https URL without a trailing slash")
+	}
+	if u, err := neturl.Parse(*search); *search != "" && (err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
+		strings.HasSuffix(*search, "/") || u.RawQuery != "" || u.Fragment != "") {
+		return errors.New("--search must be an http or https URL without a trailing slash, such as http://127.0.0.1:2322")
 	}
 	var hosts []string
 	for _, h := range strings.Split(*pushHosts, ",") {
@@ -135,7 +140,7 @@ func serve(args []string) error {
 	}
 	defer st.Close()
 	clk := clock.System{CheckSync: !*noClock}
-	handler := api.New(api.Config{URL: *url, Key: key, Clock: clk, Store: st, Tiles: maps,
+	handler := api.New(api.Config{URL: *url, Key: key, Clock: clk, Store: st, Tiles: maps, Search: *search,
 		Push: api.PushConfig{Relay: *relay, Hosts: hosts, HostsOnly: *pushHostsOnly, VAPID: vapid}})
 
 	srv := &http.Server{Addr: *listen, Handler: handler,
