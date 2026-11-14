@@ -779,3 +779,26 @@ func TestRegistration(t *testing.T) {
 	expect(t, e.octets("POST", "/v1/accounts", frames(phone.cert, phone.chain, phone.bundle, tok), nil), http.StatusCreated, "")
 	expect(t, e.octets("POST", "/v1/accounts", frames(phone.cert, phone.chain, phone.bundle, tok), nil), http.StatusForbidden, "bad_token")
 }
+
+// A circle's stored envelopes are held to a size; past it the sweep drops the oldest, and
+// the replay record stays, so a dropped envelope isn't stored again (API.md §3).
+func TestCircleBytes(t *testing.T) {
+	l := newLive(t, generous, api.StreamTimes{})
+	maya := byLabel(l.devs, "maya/phone")
+	f1, f3 := envelopeNamed(t, "f1"), envelopeNamed(t, "f3") // circle envelopes Maya receives
+	l.post(f1)
+	l.post(f3)
+	defer func(old store.Retention) { api.Retention = old }(api.Retention)
+	api.Retention.CircleBytes = uint64(len(f1)+len(f3)) - 1
+	if n, err := l.srv.Sweep(); err != nil || n.Dropped != 1 {
+		t.Fatalf("swept %+v %v", n, err)
+	}
+	rec := l.do(call{method: "GET", path: "/v1/inbox", token: l.login(maya)})
+	if body := rec.Body.Bytes(); bytes.Contains(body, f1) || !bytes.Contains(body, f3) {
+		t.Fatal("the oldest wasn't the one dropped")
+	}
+	l.post(f1) // posting it again is answered as before, and stores nothing
+	if body := l.do(call{method: "GET", path: "/v1/inbox", token: l.login(maya)}).Body.Bytes(); bytes.Contains(body, f1) {
+		t.Fatal("a dropped envelope came back")
+	}
+}

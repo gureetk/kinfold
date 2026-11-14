@@ -218,7 +218,7 @@ func everyMinute(s *api.Server) {
 		} else if n != (store.Swept{}) {
 			slog.Info("swept", "envelopes", n.Envelopes, "replay_records", n.Seen, "sessions", n.Sessions,
 				"challenges", n.Challenges, "tokens", n.Tokens, "invites", n.Invites, "removals", n.Removals,
-				"watches", n.Watches, "shares", n.Shares, "circles", n.Circles)
+				"watches", n.Watches, "shares", n.Shares, "circles", n.Circles, "dropped_for_space", n.Dropped)
 		}
 		if err := s.CheckSilences(); err != nil {
 			slog.Error("silence check failed", "err", err)

@@ -268,9 +268,14 @@ type Retention struct {
 	Removals      uint64 // a removed device may read the log for this long (API.md §6)
 	Results       uint64 // a join result, after it is written (§9)
 	ClosedCircles uint64 // a closed circle, after its last member leaves (§6)
+	// CircleBytes is the most a circle's stored envelopes may hold, in bytes; past it the
+	// oldest are dropped (§3). 0 for no limit.
+	CircleBytes uint64
 }
 
 // Swept counts what a sweep deleted.
 type Swept struct {
 	Challenges, Sessions, Tokens, Envelopes, Seen, Removals, Invites, Watches, Shares, Circles int
+	// Dropped counts envelopes dropped to keep a circle within CircleBytes, before they ran out.
+	Dropped int
 }

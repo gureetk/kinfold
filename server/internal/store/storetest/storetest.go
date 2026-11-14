@@ -33,6 +33,7 @@ func Run(t *testing.T, open func(t *testing.T) store.Store) {
 		{"FailedUpdateLeavesNothing", failedUpdate},
 		{"PanicLeavesNothing", panicking},
 		{"Sweep", sweeping},
+		{"CircleBytes", circleBytes},
 	} {
 		t.Run(c.name, func(t *testing.T) { c.fn(t, open(t)) })
 	}
@@ -772,5 +773,53 @@ func sweeping(t *testing.T, s store.Store) {
 	update(t, s, func(tx store.Tx) (err error) { n, err = tx.Sweep(now+1_000_000_000, r); return })
 	if n.Circles != 0 {
 		t.Error("swept a circle with members")
+	}
+}
+
+// A circle whose stored envelopes outgrow CircleBytes loses its oldest until they fit;
+// other circles keep theirs.
+func circleBytes(t *testing.T, s store.Store) {
+	big, small, me := id(1), id(2), id(3)
+	var bigSeqs []uint64
+	update(t, s, func(tx store.Tx) error {
+		for i := range 4 {
+			seq, err := tx.PutEnvelope(store.Envelope{Circle: big, Sender: me, Recipients: [][]byte{me}, ExpiresAt: 1000,
+				Raw: bytes.Repeat([]byte{byte(i)}, 100)})
+			must(t, err)
+			bigSeqs = append(bigSeqs, seq)
+			if i < 2 {
+				_, err = tx.PutEnvelope(store.Envelope{Circle: small, Sender: me, Recipients: [][]byte{me}, ExpiresAt: 1000,
+					Raw: make([]byte, 100)})
+				must(t, err)
+			}
+		}
+		return nil
+	})
+	sweepWith := func(limit uint64) store.Swept {
+		var n store.Swept
+		update(t, s, func(tx store.Tx) (err error) { n, err = tx.Sweep(50, store.Retention{CircleBytes: limit}); return })
+		return n
+	}
+	if n := sweepWith(0); n.Dropped != 0 {
+		t.Fatalf("no limit dropped %d", n.Dropped)
+	}
+	if n := sweepWith(250); n.Dropped != 2 || n.Envelopes != 0 {
+		t.Fatalf("dropped %d, swept %d; want the 2 oldest of the big circle", n.Dropped, n.Envelopes)
+	}
+	view(t, s, func(tx store.Tx) error {
+		kept, _, _ := tx.Inbox(me, [][]byte{big}, 0, 10, 1<<20, 50)
+		if len(kept) != 2 || kept[0].Seq != bigSeqs[2] || kept[1].Seq != bigSeqs[3] {
+			t.Errorf("the big circle keeps its newest two: %d", len(kept))
+		}
+		if others, _, _ := tx.Inbox(me, [][]byte{small}, 0, 10, 1<<20, 50); len(others) != 2 {
+			t.Errorf("the small circle lost envelopes: %d", len(others))
+		}
+		return nil
+	})
+	if n := sweepWith(200); n.Dropped != 0 {
+		t.Fatalf("a circle at its limit lost %d", n.Dropped)
+	}
+	if n := sweepWith(150); n.Dropped != 2 { // one from each circle, both at 200 bytes
+		t.Fatalf("dropped %d, want 2", n.Dropped)
 	}
 }
