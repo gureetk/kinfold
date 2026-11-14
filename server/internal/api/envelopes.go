@@ -53,7 +53,7 @@ func (s *Server) wakeRecipients(q *request, tx store.Tx, wake string, recipients
 	if wake == "" {
 		return nil, nil
 	}
-	l := s.limiter.limits
+	l := s.limits()
 	if wake == "notify" {
 		if ok, wait := s.limiter.allow("wake/notify/"+string(q.dev.ID), l.WakeNotify, hour, q.now); !ok {
 			return nil, rateLimited(wait)
@@ -128,7 +128,7 @@ func (s *Server) storeEnvelope(q *request, id []byte, wake string, raw []byte) (
 			}
 		}
 		// Every upload counts, refused or not: checking one costs signature verifications.
-		l := s.limiter.limits
+		l := s.limits()
 		if ok, wait := s.limiter.allow("envelope/minute/"+string(q.dev.ID), l.EnvelopesPerMinute, minute, q.now); !ok {
 			return rateLimited(wait)
 		}

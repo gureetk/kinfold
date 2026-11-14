@@ -76,7 +76,7 @@ func (s *Server) createShare(q *request) error {
 				}
 			}
 		}
-		if open >= s.limiter.limits.SharesPerDevice {
+		if open >= s.limits().SharesPerDevice {
 			return rateLimited(int((soonest - q.now + 999) / 1000))
 		}
 		return tx.PutShare(store.Share{ID: in.LinkID, Account: q.dev.Account, Device: q.dev.ID, ExpiresAt: in.ExpiresAt})

@@ -202,3 +202,29 @@ func TestNoTiles(t *testing.T) {
 		t.Fatal("tiles offered")
 	}
 }
+
+// The operator may let web devices read regions in parts (API.md §13): only web devices, and
+// discovery says so.
+func TestWebTileRanges(t *testing.T) {
+	bc := [4]float64{-139.1, 48.2, -114.0, 60.0}
+	region := tilestest.Archive(0, 15, bc, 64<<10)
+	l := newLive(t, generous, api.StreamTimes{}, func(c *api.Config) { c.Tiles = mapLibrary(t, map[string][]byte{"bc": region}) })
+	phone, web := l.login(byLabel(l.devs, "maya/phone")), l.login(byLabel(l.devs, "jordan/web"))
+	part := map[string]string{"Range": "bytes=127-16383"}
+	if res := l.get("/tiles/bc.pmtiles", web, part); res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("a web device before the operator allows it: %d", res.StatusCode)
+	}
+	if disc := decode(t, l.do(call{method: "GET", path: "/.well-known/kinfold"})); slices.Contains(disc["features"].([]any), any("web_tile_ranges")) {
+		t.Fatal("offered before it is on")
+	}
+	l.admin("PATCH", "/settings", `{"web_tile_ranges": true}`)
+	if res := l.get("/tiles/bc.pmtiles", web, part); res.StatusCode != http.StatusPartialContent || !bytes.Equal(res.body, region[127:16384]) {
+		t.Fatalf("a web device: %d", res.StatusCode)
+	}
+	if res := l.get("/tiles/bc.pmtiles", phone, part); res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("a phone: %d", res.StatusCode)
+	}
+	if disc := decode(t, l.do(call{method: "GET", path: "/.well-known/kinfold"})); !slices.Contains(disc["features"].([]any), any("web_tile_ranges")) {
+		t.Fatal("not offered")
+	}
+}

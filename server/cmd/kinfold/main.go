@@ -14,7 +14,8 @@
 //	kinfold setup [--expires 24h]                 print a setup code for the first phone
 //	kinfold token create [--expires 168h]         a registration token
 //	kinfold token list | token revoke ID
-//	kinfold settings [--member-tokens on|off] [--web-devices on|off]
+//	kinfold settings [--member-tokens on|off] [--web-devices on|off] [--web-tile-ranges on|off]
+//	kinfold limits | limits set NAME N | limits reset NAME    the rate limits of API.md §3
 //	kinfold operator add|remove ACCOUNT_ID
 //	kinfold repair start [--hours 72] | repair end
 //	kinfold status                                health: clock, disk, streams, pushes, relay, last backup
@@ -46,6 +47,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	neturl "net/url"
@@ -53,6 +55,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -79,7 +82,7 @@ func main() {
 	case "restore":
 		err = restore(args)
 	case "setup", "token", "settings", "operator", "repair", "region", "coarse", "accounts", "circles", "account", "device",
-		"backup", "status":
+		"backup", "status", "limits":
 		err = adminCommand(cmd, args)
 	default:
 		usage()
@@ -91,7 +94,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: kinfold serve|setup|token|settings|operator|repair|status|backup|restore|accounts|circles|"+
+	fmt.Fprintln(os.Stderr, "usage: kinfold serve|setup|token|settings|limits|operator|repair|status|backup|restore|accounts|circles|"+
 		"account|device|region|coarse [flags]; see the package documentation")
 	os.Exit(2)
 }
@@ -142,7 +145,7 @@ func serve(args []string) error {
 			return err
 		}
 	}
-	maps, err := tiles.Open(filepath.Join(*data, "tiles"))
+	library, err := tiles.Open(filepath.Join(*data, "tiles"))
 	if err != nil {
 		return err
 	}
@@ -151,8 +154,12 @@ func serve(args []string) error {
 		return err
 	}
 	defer st.Close()
+	limits, err := savedLimits(st)
+	if err != nil {
+		return err
+	}
 	clk := clock.System{CheckSync: !*noClock}
-	handler := api.New(api.Config{URL: *url, Key: key, Clock: clk, Store: st, Tiles: maps, Search: *search, DataDir: *data,
+	handler := api.New(api.Config{URL: *url, Key: key, Clock: clk, Store: st, Tiles: library, Search: *search, DataDir: *data, Limits: limits,
 		Push: api.PushConfig{Relay: *relay, Hosts: hosts, HostsOnly: *pushHostsOnly, VAPID: vapid}})
 
 	srv := &http.Server{Addr: *listen, Handler: handler,
@@ -160,7 +167,7 @@ func serve(args []string) error {
 		IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 16 << 10,
 		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13}}
 	adminSrv := &http.Server{Handler: (&admin.Admin{Store: st, Clock: clk, Key: key, URL: *url, Notify: handler.Notice,
-		Tiles: maps, API: handler, DataDir: *data}).Handler(), ReadHeaderTimeout: 10 * time.Second}
+		Tiles: library, API: handler, DataDir: *data}).Handler(), ReadHeaderTimeout: 10 * time.Second}
 
 	sock := filepath.Join(*data, "admin.sock")
 	os.Remove(sock)
@@ -239,6 +246,20 @@ func loadKey(path string) (ed25519.PrivateKey, error) {
 		return nil, fmt.Errorf("%s is not a server key", path)
 	}
 	return ed25519.NewKeyFromSeed(seed), nil
+}
+
+// savedLimits are the rate limits the operator has set (kinfold limits); the rest keep their
+// defaults.
+func savedLimits(st store.Store) (api.Limits, error) {
+	var l api.Limits
+	err := st.View(func(tx store.Tx) error {
+		s, err := tx.Settings()
+		if err != nil || s.Limits == "" {
+			return err
+		}
+		return json.Unmarshal([]byte(s.Limits), &l)
+	})
+	return l, err
 }
 
 // loadVAPID reads the server's Web Push key (RFC 8292), making one on first start. Phones
@@ -390,6 +411,7 @@ func adminCommand(cmd string, args []string) error {
 	hours := fs.Uint64("hours", admin.MaxRepairHours, "how long repair mode lasts, at most 72 hours")
 	memberTokens := fs.String("member-tokens", "", "on or off: admins may mint registration tokens with invites")
 	webDevices := fs.String("web-devices", "", "on or off: web and Home Assistant devices may be registered")
+	webRanges := fs.String("web-tile-ranges", "", "on or off: web devices may read map regions in parts, which shows the server what they look at")
 	name := fs.String("name", "", "the region's name, as apps show it; its ID if left out")
 	// Subcommands come before the flags: kinfold token create --expires 48h.
 	var sub []string
@@ -470,15 +492,46 @@ func adminCommand(cmd string, args []string) error {
 		if err != nil {
 			return err
 		}
+		wr, err := onOff(*webRanges)
+		if err != nil {
+			return err
+		}
 		method, in := "GET", any(nil)
-		if mt != nil || wd != nil {
-			method, in = "PATCH", map[string]any{"member_tokens": mt, "web_devices": wd}
+		if mt != nil || wd != nil || wr != nil {
+			method, in = "PATCH", map[string]any{"member_tokens": mt, "web_devices": wd, "web_tile_ranges": wr}
 		}
 		out, _, err := call(method, "/settings", in)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("member tokens %v, web devices %v, repair until %v\n", out["member_tokens"], out["web_devices"], when(out["repair_until"]))
+		fmt.Printf("member tokens %v, web devices %v, web tile ranges %v, repair until %v\n", out["member_tokens"], out["web_devices"],
+			out["web_tile_ranges"], when(out["repair_until"]))
+	case cmd == "limits" && (len(sub) == 0 || len(sub) == 3 && sub[0] == "set" || len(sub) == 2 && sub[0] == "reset"):
+		method, in := "GET", map[string]int(nil)
+		if len(sub) > 0 {
+			n := 0
+			if sub[0] == "set" {
+				var err error
+				if n, err = strconv.Atoi(sub[2]); err != nil || n < 1 {
+					return errors.New("a limit is a whole number from 1 to 1,000,000")
+				}
+			}
+			method, in = "PATCH", map[string]int{sub[1]: n}
+		}
+		out, _, err := call(method, "/limits", in)
+		if err != nil {
+			return err
+		}
+		inForce, _ := out["in_force"].(map[string]any)
+		set, _ := out["set"].(map[string]any)
+		names := slices.Sorted(maps.Keys(inForce))
+		for _, name := range names {
+			mark := ""
+			if _, ok := set[name]; ok {
+				mark = "  (set)"
+			}
+			fmt.Printf("%-24s %v%s\n", name, inForce[name], mark)
+		}
 	case cmd == "operator" && len(sub) == 2 && (sub[0] == "add" || sub[0] == "remove"):
 		if _, err := wire.DecodeB64u(sub[1]); err != nil {
 			return errors.New("account IDs are base64url")

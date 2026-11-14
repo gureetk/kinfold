@@ -104,7 +104,7 @@ func (s *Server) createLink(q *request) error {
 		return badRequest("link_id is 16 bytes and direction 1 or 2")
 	}
 	m := &mailbox{direction: in.Direction, expiresAt: in.ExpiresAt, slots: map[string][]byte{}}
-	l := s.limiter.limits
+	l := s.limits()
 	if in.Direction == 1 {
 		if err := s.cfg.Store.View(func(tx store.Tx) error { return s.session(q, tx, phone) }); err != nil {
 			return err
