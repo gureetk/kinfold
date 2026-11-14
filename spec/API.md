@@ -513,7 +513,7 @@ The web console adds its own protections, since a console on `localhost` is a kn
 
 | Method and path | Command line | Does |
 | --- | --- | --- |
-| `POST /setup` | `kinfold setup [--expires 24h]` | A registration token and the setup code carrying it, with the server's URL and key |
+| `POST /setup` | `kinfold setup [--expires 24h]` | A registration token and the setup code carrying it, with the server's URL, its key and the key's fingerprint (spec §13.1) |
 | `POST /tokens`, `GET /tokens`, `DELETE /tokens/{id}` | `kinfold token create\|list\|revoke` | Registration tokens; only their hashes are kept, and `id` is the first 8 bytes of the hash in hex |
 | `GET /settings`, `PATCH /settings` | `kinfold settings [--member-tokens on\|off] [--web-devices on\|off] [--web-tile-ranges on\|off]` | `member_tokens`, `web_devices` and `web_tile_ranges` |
 | `GET /limits`, `PATCH /limits` | `kinfold limits`, `kinfold limits set NAME N\|reset NAME` | The rate limits of §3 by name (`envelopes_per_minute`, `search_per_minute` and so on): those in force and those the operator set. `PATCH` takes `{"name": n}`, 1 to 1,000,000, or 0 for the default; a change holds at once and after a restart |
@@ -526,11 +526,11 @@ The web console adds its own protections, since a console on `localhost` is a kn
 | `GET /circles` | `kinfold circles` | Every circle, closed ones too: its ID, how many members and devices it has, the length of its log, its head and the day it was made. While phones repair after a restore, the head shows how far each circle has come |
 | `POST /backup` | `kinfold backup FILE` | `{"file"}`, which must not exist yet: a tar archive of a snapshot of the database, taken while the server runs, and the server's keys (`server.key`, and `vapid.key` if there is one). Map files are left out. The archive is as secret as the server key. Records `last_backup_at` |
 | — | `kinfold restore FILE` | With the server stopped: reads the archive, brings its database to this server's schema and starts repair mode (§6) in it, for 72 hours or `--hours`, and only then puts the database and keys in place. An archive that isn't a backup, or whose database this server can't read, changes nothing |
-| `GET /status` | `kinfold status` | Uptime, whether the clock is synchronized, free disk, open streams, pushes in flight, link mailboxes, whether the relay answers, repair mode and the last backup |
+| `GET /status` | `kinfold status` | The server key's fingerprint, uptime, whether the clock is synchronized, free disk, open streams, pushes in flight, link mailboxes, whether the relay answers, repair mode and the last backup |
 | `GET /regions`, `PUT /regions/{id}`, `DELETE /regions/{id}` | `kinfold region list\|add ID FILE [--name NAME]\|remove ID` | Map regions (§13). `PUT` takes `{"file", "name"}`: the server copies the file in, checks that it is a PMTiles version 3 archive, and keeps it under its SHA-256, so a file never changes under a download |
 | `PUT /coarse`, `DELETE /coarse` | `kinfold coarse set FILE\|remove` | The coarse archive (§13), refused if it goes past zoom 13 |
 
-The setup code is printed as text for now, with the server key in base64url.
+The setup code is printed as text for now, with the server key's fingerprint.
 
 ---
 
@@ -541,5 +541,4 @@ The setup code is printed as text for now, with the server key in base64url.
 - **Quotas.** What a phone is told, and shows, when a circle's stored envelopes hit the limit.
 - **Relay abuse limits** and whether registering with the relay should need Apple's app attestation.
 - **Federation** between servers is out of scope for v0.
-- **The server key's fingerprint.** Spec §13.1 asks apps that let a person type an address to show the server key's fingerprint for comparison with the command line's, but defines no format. The command line prints the whole key in base64url until it does.
 - **Restoring registrations.** Repair mode (§6) restores logs. Devices and accounts registered after the backup are lost with it; how they register again, without new tokens for everyone, is still to be settled.

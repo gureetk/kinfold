@@ -107,7 +107,7 @@ Each has `direction`, `link`, `code_text` (`KFL0…`), `secret`, `link_id`, `lin
 ### `share_link` and `auth`
 
 - `share_link`: `server_url`, `secret`, `link_id`, `share_key`, `url`, `payload_bytes` (the JSON before padding), and one `update` with its `payload`.
-- `auth`: the server's key and signed `server_info` document, a login `challenge` with `expires_at` and `challenge_sig`, and the device's `device_sig`.
+- `auth`: the server's key, its `fingerprint` (§13.1, six groups of five digits) and signed `server_info` document, a login `challenge` with `expires_at` and `challenge_sig`, and the device's `device_sig`.
 
 ### `watch_grants` and `push`
 

@@ -1717,7 +1717,9 @@ share_vec = dict(server_url=SERVER_URL, secret=SHARE.hex(), link_id=rv.share_id(
 info = idn.make_server_info(SERVER_SEED, SERVER_URL, T0 - 30 * DAY, T0 + 365 * DAY)
 assert idn.parse_server_info(info)["sig_ok"]
 challenge = rnd("auth/challenge")
-auth_vec = dict(server_seed=SERVER_SEED.hex(), server_key=SERVER_KEY.hex(), server_info=info.hex(),
+FINGERPRINT = idn.server_fingerprint(SERVER_KEY)
+assert len(FINGERPRINT) == 35 and FINGERPRINT.replace(" ", "") != idn.safety_half(SERVER_KEY)  # labels keep them apart
+auth_vec = dict(server_seed=SERVER_SEED.hex(), server_key=SERVER_KEY.hex(), fingerprint=FINGERPRINT, server_info=info.hex(),
                 server_url=SERVER_URL, challenge=challenge.hex(), device=jp.label, device_id=jp.id.hex(),
                 expires_at=T0 + MIN, challenge_sig=idn.challenge_sig(SERVER_SEED, challenge, jp.id, T0 + MIN).hex(),
                 device_sig=idn.auth_sig(jp.dsk, SERVER_KEY, challenge, jp.id).hex())

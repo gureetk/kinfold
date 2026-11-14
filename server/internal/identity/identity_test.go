@@ -92,6 +92,9 @@ func TestServerIdentity(t *testing.T) {
 	if again := identity.MakeServerInfo(priv, si.URL, si.IssuedAt, si.ExpiresAt); !bytes.Equal(again, info) {
 		t.Error("MakeServerInfo doesn't rebuild server_info")
 	}
+	if fp := identity.Fingerprint(si.Key); fp != tv.Str(au["fingerprint"]) {
+		t.Errorf("fingerprint %q, want %q", fp, tv.Str(au["fingerprint"]))
+	}
 	bad := append([]byte(nil), info...)
 	bad[3] ^= 1
 	if _, ok := identity.ParseServerInfo(bad); ok {

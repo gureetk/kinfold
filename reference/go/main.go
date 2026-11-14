@@ -19,6 +19,7 @@ import (
 	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -968,6 +969,25 @@ func envelopeCheck(s *state, raw []byte, seen map[string][32]byte, now uint64) s
 
 // ---- watch grants, pushes and the relay signature (§14) ----
 
+// fingerprint is the server key's fingerprint (§13.1): SHA-512 iterated 5,200 times under
+// its label, read as six groups of five digits.
+func fingerprint(key []byte) string {
+	h := append(label("server-fingerprint"), key...)
+	for range 5200 {
+		sum := sha512.Sum512(append(h, key...))
+		h = sum[:]
+	}
+	groups := make([]string, 0, 6)
+	for i := 0; i < 30; i += 5 {
+		var n uint64
+		for _, b := range h[i : i+5] {
+			n = n<<8 | uint64(b)
+		}
+		groups = append(groups, fmt.Sprintf("%05d", n%100_000))
+	}
+	return strings.Join(groups, " ")
+}
+
 // watchGrantOK reports whether a server may register the watch at time now.
 func watchGrantOK(s *state, raw []byte, now uint64) bool {
 	r := &reader{b: raw}
@@ -1229,6 +1249,7 @@ func main() {
 	isig := r.take(64)
 	check("auth", "server info", r.ok() && string(url) == str(au["server_url"]) && bytes.Equal(key, hx(au["server_key"])) &&
 		verify(key, "server-info", info[:tbs], isig))
+	check("auth", "fingerprint", fingerprint(key) == str(au["fingerprint"]))
 	ch, did := hx(au["challenge"]), hx(au["device_id"])
 	check("auth", "challenge", verify(key, "auth-challenge", bytes.Join([][]byte{ch, did, u64(num(au["expires_at"]))}, nil), hx(au["challenge_sig"])))
 	check("auth", "device", verify(hx(devices[str(au["device"])]["dsk_pub"]), "auth", bytes.Join([][]byte{key, ch, did}, nil),

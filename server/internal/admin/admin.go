@@ -171,7 +171,7 @@ func (a *Admin) setup(r *http.Request) (int, any, error) {
 	key := a.Key.Public().(ed25519.PublicKey)
 	code := identity.SetupCode(identity.MakeSetup(a.URL, key, tok, t.ExpiresAt))
 	return http.StatusCreated, map[string]any{"code": code, "server_url": a.URL, "server_key": wire.EncodeB64u(key),
-		"token_id": tokenID(t.Hash), "expires_at": t.ExpiresAt}, nil
+		"fingerprint": identity.Fingerprint(key), "token_id": tokenID(t.Hash), "expires_at": t.ExpiresAt}, nil
 }
 
 func (a *Admin) createToken(r *http.Request) (int, any, error) {
@@ -684,6 +684,7 @@ func (a *Admin) status(r *http.Request) (int, any, error) {
 	var out map[string]any
 	json.Unmarshal(b, &out)
 	out["repair_until"], out["last_backup_at"] = st.RepairUntil, st.LastBackupAt
+	out["fingerprint"] = identity.Fingerprint(a.Key.Public().(ed25519.PublicKey))
 	return http.StatusOK, out, nil
 }
 

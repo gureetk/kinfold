@@ -229,12 +229,17 @@ def open_wrap(wraps: list, me: bytes, my_keys: dict, info_fn):
 SAFETY_ITERATIONS = 5200
 
 
+def _digits(purpose: str, key: bytes) -> str:
+    """30 digits from a public key: SHA-512 iterated under a label, as sections 11 and 13.1 do."""
+    h = vec16(label(purpose)) + key
+    for _ in range(SAFETY_ITERATIONS):
+        h = hashlib.sha512(h + key).digest()
+    return "".join(f"{int.from_bytes(h[i:i + 5], 'big') % 100000:05d}" for i in range(0, 30, 5))
+
+
 def safety_half(ik_pub: bytes) -> str:
     """30 digits for one person's current identity key."""
-    h = vec16(label("safety")) + ik_pub
-    for _ in range(SAFETY_ITERATIONS):
-        h = hashlib.sha512(h + ik_pub).digest()
-    return "".join(f"{int.from_bytes(h[i:i + 5], 'big') % 100000:05d}" for i in range(0, 30, 5))
+    return _digits("safety", ik_pub)
 
 
 def safety_code(ik_a: bytes, ik_b: bytes) -> str:
@@ -250,6 +255,12 @@ def safety_qr(ik_a: bytes, ik_b: bytes) -> str:
 
 
 # --- server identity, setup codes and login (section 13) -------------------------------
+
+def server_fingerprint(server_key: bytes) -> str:
+    """The server key's 30 digits, in six groups of five (13.1)."""
+    digits = _digits("server-fingerprint", server_key)
+    return " ".join(digits[i:i + 5] for i in range(0, 30, 5))
+
 
 def make_server_info(server_seed: bytes, url: str, issued_at: int, expires_at: int) -> bytes:
     tbs = (u8(VERSION) + vec16(url.encode("utf-8")) + ed25519_public(server_seed)

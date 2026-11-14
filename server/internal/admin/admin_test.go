@@ -56,7 +56,8 @@ func TestAdmin(t *testing.T) {
 	raw, ok := identity.ParseCode("KFS0", out["code"].(string))
 	s, ok2 := identity.ParseSetup(raw)
 	if !ok || !ok2 || s.URL != url || !bytes.Equal(s.Key, key.Public().(ed25519.PublicKey)) ||
-		s.ExpiresAt != clk.Now()+admin.DefaultSetup || out["server_key"] != wire.EncodeB64u(s.Key) {
+		s.ExpiresAt != clk.Now()+admin.DefaultSetup || out["server_key"] != wire.EncodeB64u(s.Key) ||
+		out["fingerprint"] != identity.Fingerprint(s.Key) {
 		t.Fatalf("setup code: %v", out)
 	}
 	// Only the token's hash is kept.

@@ -1154,7 +1154,17 @@ struct Setup {
 code = "KFS0" ‖ b64u(Setup)
 ```
 
-A device set up by typing an address instead has only the server's word for its key. An app that allows this MUST show the key's fingerprint and ask the person to compare it with the one the server's command line prints.
+A device set up by typing an address instead has only the server's word for its key. An app that allows this MUST show the key's **fingerprint** and ask the person to compare it with the one the server's command line prints:
+
+```text
+fingerprint(server_key):
+  h = vec16("kinfold/v0/server-fingerprint") ‖ server_key
+  repeat 5200 times:  h = SHA-512(h ‖ server_key)
+  for i in 0, 5, 10, 15, 20, 25:  the 5 bytes h[i:i+5] as a big-endian integer, mod 100000, as 5 digits
+  → 30 digits, shown as six groups of five
+```
+
+It is built as one person's half of a safety code is (§11), under its own label: 30 digits, about 100 bits, at 5,200 hashes a try, so a server passing off another key has to match all of them.
 
 ### 13.2 Login
 
@@ -1352,6 +1362,7 @@ All prefixed with `kinfold/v0/`.
 | `link-key`, `link-confirm` | KDF | 10 |
 | `link-response` | Sign | 10.3 |
 | `safety` | iterated SHA-512 prefix | 11 |
+| `server-fingerprint` | iterated SHA-512 prefix | 13.1 |
 | `share-id` | H | 12 |
 | `share-key` | KDF | 12 |
 | `server-info`, `auth-challenge`, `auth`, `server-move` | Sign | 13 |
@@ -1418,7 +1429,7 @@ The vectors hold:
 - 154 log cases, each a short continuation of the main log or a log of its own: every fatal reason code except the clock-dependent `bad_time`, every rejection, flagged and deferred entries, every entry type from a web, a Home Assistant and a recovery author, the limits (an oversized entry, a 33rd member, a 9th device, a 17th pause, a 9th chain link), details padding, identity chains, recovery devices, pending rekeys, guardian repair, and times at the top of the u64 range;
 - envelopes: a valid example of every payload type, the edges of the time limits (the top of the u64 range among them) and of the payload limits (all but the avatar's, which each checker tests by hand to keep the file small), each failure of §7.6, the sender rules of §8.2, a replay, and the server's own checks (`bad_ttl`, `stale_head`, wraps that name the wrong devices, the same bytes posted twice);
 - padding, approximate positions and safety codes;
-- an invite with its join request and both join results; linking in both directions and after a rotation, with requests the existing device must refuse; recovery kits; a setup code; server moves; a share link; the server's identity document and a login;
+- an invite with its join request and both join results; linking in both directions and after a rotation, with requests the existing device must refuse; recovery kits; a setup code; server moves; a share link; the server's identity document, its key's fingerprint and a login;
 - watch grants, valid and not; a push of each type and pushes a device drops; a relay signature.
 
 | Implementation | MUST pass |
@@ -1512,7 +1523,7 @@ Draft 0.3 applies the design review of November 2026. Nothing from draft 0.2 can
 | Recovery | Recovery kit and recovery devices (`ADD_RECOVERY`, kind 5) | 10.4 |
 | Safety codes | 60 digits | 11 |
 | Share links | What they trust is stated; apps open them without the server's page | 12 |
-| Server | Setup codes; single-use login challenges; `ServerMove` | 13 |
+| Server | Setup codes; a fingerprint for the server key; single-use login challenges; `ServerMove` | 13 |
 | Watches | Per device, with a signed grant from the watched device; only circle envelopes count; listable; grants carry their time of issue, so an ended watch stays ended | 14.1 |
 | Push | One sealed, signed, fixed-size format; wake-up values; relay capability bound to the server's key | 14.2–14.4 |
 | Registries | Device kind 5; new labels and reason codes; limits; options and features | 16 |

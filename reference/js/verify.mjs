@@ -1008,6 +1008,7 @@ await attempt('auth', async () => {
   const a = V.auth;
   const serverKey = X(a.server_key);
   checkEq('server_key from server_seed', toHex(await K.ed25519PublicFromSeed(X(a.server_seed))), a.server_key);
+  checkEq('the server key\'s fingerprint', await K.serverFingerprint(serverKey), a.fingerprint);
   const server = await K.importSigningKey(X(a.server_seed), serverKey);
   const info = K.parseServerInfo(X(a.server_info));
   checkEq('server_info fields', { url: info.server_url, key: info.server_key }, { url: a.server_url, key: a.server_key });

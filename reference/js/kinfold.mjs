@@ -1998,10 +1998,10 @@ export const recoveryCode = kit => 'KFR0' + b64uEncode(kit);
 // §11 Safety codes
 // ---------------------------------------------------------------------------
 
-/** 30 digits for one person's current identity key. */
-export async function safetyHalf(ikPub) {
-  let h = concat(vec16(label('safety')), ikPub);
-  for (let i = 0; i < 5200; i++) h = await sha512(concat(h, ikPub));
+/** 30 digits from a public key: SHA-512 iterated under a label, as §11 and §13.1 do. */
+async function keyDigits(purpose, key) {
+  let h = concat(vec16(label(purpose)), key);
+  for (let i = 0; i < 5200; i++) h = await sha512(concat(h, key));
   let out = '';
   for (let i = 0; i < 30; i += 5) {
     let v = 0n;
@@ -2009,6 +2009,14 @@ export async function safetyHalf(ikPub) {
     out += String(v % 100000n).padStart(5, '0');
   }
   return out;
+}
+
+/** 30 digits for one person's current identity key. */
+export const safetyHalf = ikPub => keyDigits('safety', ikPub);
+
+/** §13.1: the server key's fingerprint, six groups of five digits. */
+export async function serverFingerprint(serverKey) {
+  return (await keyDigits('server-fingerprint', serverKey)).match(/.{5}/g).join(' ');
 }
 
 /** 60 digits, shown as twelve groups of five; the same whichever key is "a". */
