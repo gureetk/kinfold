@@ -40,8 +40,8 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/venv"
           "$RUNNER_TEMP/venv/bin/pip" install --require-hashes -r ../reference/python/requirements.txt
 
-      - name: Test, with the differential run against the Python reference
-        run: KINFOLD_PYTHON="$RUNNER_TEMP/venv/bin/python" go test -count=1 ./...
+      - name: Test with the race detector, the Python reference as oracle and as two clients
+        run: KINFOLD_PYTHON="$RUNNER_TEMP/venv/bin/python" go test -race -count=1 ./...
 
       - name: Fuzz every target for 10 seconds
         run: |

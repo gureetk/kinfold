@@ -1,6 +1,6 @@
 # Kinfold HTTP API, version 0
 
-**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. No server implements it yet; the Go checker in `reference/go` covers only the protocol rules.
+**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §7 except the stream, §9, and the part of §16 that a first device needs.
 **License:** [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 Section numbers written "spec §…" point into PROTOCOL.md. Where the two documents disagree about bytes, the spec wins.
@@ -46,8 +46,8 @@ Section numbers written "spec §…" point into PROTOCOL.md. Where the two docum
 
 - **Circle access.** A call that names a circle succeeds only for an active device of that circle at the server's current head (with one exception in §6). Everyone else gets 404, the same answer as for a circle that doesn't exist.
 - **Server time.** Every response carries `Kinfold-Time`, the server's clock in milliseconds. Devices build their trusted time on it (spec §8.4).
-- **API revision.** Clients send `Kinfold-Api: 1`. A server that no longer supports a client's revision answers 426.
-- **Posting twice is safe.** Every call that stores a protocol object succeeds again when the same bytes are sent again. Clients retry after a lost reply without changing anything.
+- **API revision.** Clients send `Kinfold-Api: 1` with every call under `/v1/`. A server that no longer supports a client's revision answers 426; a call without the header, or naming a revision above the discovery document's `api.max`, gets 400 `bad_request`.
+- **Posting twice is safe.** Every call that stores a protocol object succeeds again when the same bytes are sent again, with the answer the first call got. Clients retry after a lost reply without changing anything. An envelope is checked again before it counts as a repeat (spec §7.6 steps 1 to 8), so one that has since expired, or whose sender has since left, is refused like any other.
 - **No cross-origin access.** The server sends no CORS headers. The browser map talks to `kinfold-web`, which forwards its requests and sets the headers a browser can't, such as `Authorization` on a WebSocket.
 - **Logs.** The server MUST NOT log bodies, tokens, IDs, positions or IP addresses. A reverse proxy in front of it MUST be set up the same way; the project ships a Caddy configuration with access logs off.
 
@@ -68,6 +68,7 @@ Errors are JSON: `{"error": "<code>", "message": "<text for developers>"}` plus 
 | 409 | `slot_taken` | A mailbox slot or result that was already written with different bytes |
 | 409 | `out_of_order` | A link slot written before the one it answers |
 | 409 | `still_member` | Deleting an account that is still in a circle |
+| 409 | `already_registered` | Registering an account or device that is already registered |
 | 410 | `gone` | An invite, link mailbox or share link that has ended |
 | 413 | `too_large` | A body over the endpoint's limit (§3) |
 | 422 | a reason code from spec §16.5 | A protocol object was read and refused: `bad_signature`, `stale_head`, `bad_wraps` and so on. For log entries and envelopes the answer carries the circle's current `seq` and `head`, so the sender can see how far behind it is |
@@ -89,6 +90,8 @@ Sizes that every implementation must agree on are in spec §16.6. The API adds t
 | Log entry | 65,536 bytes |
 | Envelope | 92,232 bytes |
 | JSON body | 16 KB |
+| Account registration | 4 KB |
+| Device registration | 1 KB |
 | Join request, join result | 4 KB |
 | Link slot | 1 KB; the `response` slot 256 KB |
 | Share update | 2 KB |
@@ -96,7 +99,7 @@ Sizes that every implementation must agree on are in spec §16.6. The API adds t
 | Log page | 1,024 entries or 4 MB, whichever comes first |
 | Inbox page | 256 records or 4 MB |
 
-Default rate limits. The operator can change them; clients MUST handle 429 at any of them.
+Default rate limits. The operator can change them; clients MUST handle 429 at any of them. A limit per address counts the address of the connection, which the server keeps in memory for the length of the window and never writes down. A refused request counts like an accepted one. So does an envelope posted again, which the server checks again (§1); a log entry posted again doesn't.
 
 | What | Default |
 | --- | --- |
@@ -119,7 +122,7 @@ Default rate limits. The operator can change them; clients MUST handle 429 at an
 | --- | --- | --- |
 | `GET /.well-known/kinfold` | — | The server's identity and what it offers |
 | `GET /healthz` | — | `200 {"ok": true}` when the server can serve; nothing else |
-| `GET /v1/server/status` | P | For accounts the operator has marked as operators: uptime, free disk, clock state, last backup, repair mode. 403 for everyone else |
+| `GET /v1/server/status` | P | For accounts the operator has marked as operators: `{"uptime_ms", "clock_synced", "repair", "free_disk", "last_backup_at"}`, with `null` for what the server doesn't know. 403 for everyone else |
 
 ```json
 {
@@ -156,13 +159,15 @@ Default rate limits. The operator can change them; clients MUST handle 429 at an
 | `POST /v1/auth/session` | — | `{"device_id", "challenge", "device_sig"}` | `{"token", "expires_at"}` |
 | `DELETE /v1/auth/session` | any | — | 204 |
 
-**Registering.** The server checks the certificate, the chain and the bundle as spec §6.4 does for `ADD_MEMBER` (kind 1 or 2 only) and spends the token. Tokens are single-use and come from a setup code (spec §13.1), the operator's command line, or an invite (§9).
+**Registering.** The server checks the certificate, the chain and the bundle as spec §6.4 does for `ADD_MEMBER` (kind 1 or 2 only), with the bundle current at the server's clock, and spends the token. A refusal is 422 with `malformed`, `bad_cert`, `kind_not_allowed` or `bad_bundle`; a token that is unknown, spent or expired is 403 `bad_token`; an account or device the server already has is 409 `already_registered`. Tokens are single-use and come from a setup code (spec §13.1), the operator's command line, or an invite (§9). They are bytes: base64url inside JSON, a raw frame here.
 
-**Devices.** Registration with the server is what lets a device log in; being in a circle's log is what lets it take part there. A phone that links a device, or makes a recovery kit, registers the new device here and then appends `ADD_DEVICE` or `ADD_RECOVERY` to each circle. The certificate MUST carry the account's current identity key. Web and Home Assistant devices can be registered only while the operator allows them. An account has at most 8 registered devices, one of them a recovery device.
+**Devices.** Registration with the server is what lets a device log in; being in a circle's log is what lets it take part there. A phone that links a device, or makes a recovery kit, registers the new device here and then appends `ADD_DEVICE` or `ADD_RECOVERY` to each circle. The certificate MUST carry the account's current identity key (422 `wrong_account` otherwise), and the bundle MUST be current at the server's clock (422 `bad_bundle`). Web and Home Assistant devices can be registered only while the operator allows them (403 otherwise). An account has at most 8 registered devices, one of them a recovery device (422 `too_many_devices`).
+
+**Rotating the identity key.** The link's old key MUST be the account's current one and its new key a different, valid key, with both signatures verifying for the account (spec §4.3); otherwise, or once the account's chain holds 8 links, the answer is 422 `bad_rotation`. The account keeps its devices.
 
 **Deleting an account** removes its devices, sessions, registrations, watches, invites and share links. The app first leaves every circle. The server holds nothing readable to export; the app exports what the phone itself holds.
 
-**Login** follows spec §13.2. A challenge lives 60 seconds and works once. The challenge call answers the same way for a device the server has never seen. A session lasts at most 24 hours, is bound to one device, and ends at once when the device is deregistered. Being removed from a circle doesn't end a session; it ends that circle's access (§6).
+**Login** follows spec §13.2. A challenge lives 60 seconds and works once: the first attempt that names it uses it up, whether or not it succeeds. The challenge call answers the same way for a device the server has never seen. A session lasts at most 24 hours, is bound to one device, and ends at once when the device is deregistered. Being removed from a circle doesn't end a session; it ends that circle's access (§6).
 
 **After every login** a client puts its push registration (§12) and its watches (§8) again. Both calls replace what is there, so nothing is lost when a server has been restored from a backup.
 
@@ -178,11 +183,13 @@ Default rate limits. The operator can change them; clients MUST handle 429 at an
 | `POST /v1/circles/{id}/log` | any | One entry | `201 {"seq", "head"}` |
 | `POST /v1/circles/{id}/log/repair` | any | One entry | `201 {"seq", "head"}`. Only in repair mode |
 
+**Creating.** The founder certificate's device MUST be the session's device, and its account the session's account (403 otherwise). The same `GENESIS` again succeeds, however late: its hash is the circle ID.
+
 **Reading.** Leave `after` out to start at `GENESIS`. Recovery devices may read the log; they need it to add a phone.
 
-**Appending.** The entry's author MUST be the session's device (403 otherwise). The server runs spec §6.3 steps 1 to 9 and checks `created_at` against its clock (`bad_time`). An entry whose `seq` or `prev_hash` doesn't follow the current head gets 409 `conflict` with the current `seq` and `head`; any other failure gets 422 with its reason code. Entries are appended one at a time. On success the server applies the public effects at once: it tells every active device (a `log` frame on the stream, §7), ends the circle access of removed devices and members, ends watches that name them, and deletes a spent invite.
+**Appending.** The entry's author MUST be the session's device (403 otherwise). The server runs spec §6.3 steps 1 to 9 and then checks `created_at` against its clock (`bad_time`), in that order. An entry whose `seq` or `prev_hash` doesn't follow the current head gets 409 `conflict` with the current `seq` and `head`; any other failure gets 422 with its reason code and the same two fields. An entry that is already in the log, byte for byte, succeeds again with its own `seq` and `head`. Entries are appended one at a time. On success the server applies the public effects at once: it tells every active device (a `log` frame on the stream, §7), ends the circle access of removed devices and members, ends watches that name them, closes a spent invite to new requests, and ends the invites of members who are no longer in the circle (§9).
 
-**Being removed.** A device that has been removed, or whose account has, may still read the log up to and including the entry that removed it, for 30 days. That is the one exception to circle access. It lets the phone check who signed its removal instead of taking an error's word for it. The server also sends it a `removed` event (§7).
+**Being removed.** A device that has been removed, or whose account has, may still read the log up to and including the entry that removed it, for 30 days. That is the one exception to circle access. For such a device `Kinfold-Seq` and `Kinfold-Head` give the entry that removed it, not the circle's current head. It lets the phone check who signed its removal instead of taking an error's word for it. The server also sends it a `removed` event (§7).
 
 **Closed circles.** When the last member leaves, the circle is closed. The server deletes it 30 days later.
 
@@ -190,7 +197,8 @@ Default rate limits. The operator can change them; clients MUST handle 429 at an
 
 - reports `"repair": true` in the discovery document;
 - refuses normal appends with 503 `repair_mode`, so a phone that slept through the outage can't branch the log;
-- accepts, on the repair path, the entry that follows its head from any active device of the circle, whoever authored it. Steps 1 to 9 still apply. `created_at` may be any age but not more than 10 minutes ahead (spec §6.7).
+- accepts, on the repair path, the entry that follows its head from any active device of the circle, whoever authored it. Steps 1 to 9 still apply. `created_at` may be any age but not more than 10 minutes ahead (spec §6.7);
+- accepts on `POST /v1/circles`, from any phone or tablet, the `GENESIS` of a circle the backup lost entirely, with the same rule for `created_at`. Its other entries then follow on the repair path.
 
 Phones notice on their own: an envelope whose `log_head` the server doesn't know is refused with `unknown_log_head` and the server's `seq`, and a phone that holds more of the log than that re-posts what is missing. Repair mode ends when the operator switches it off, or by itself after 72 hours. Outside repair mode the repair path answers 404.
 
@@ -204,7 +212,7 @@ Phones notice on their own: an envelope whose `log_head` the server doesn't know
 | `GET /v1/inbox?since={cursor}&limit={n}` | R | — | Frames, one delivery record each |
 | `GET /v1/stream?since={cursor}` | R | WebSocket | Live delivery |
 
-**Uploading.** The sender MUST be the session's device. The server makes the checks of spec §7.5 and answers 422 with the reason, plus the circle's `seq` and `head`. On `stale_head` or `bad_wraps` the sender fetches the log and builds the envelope again with a new `seq`.
+**Uploading.** The sender MUST be the session's device (403 otherwise). The server makes the checks of spec §7.5 and answers 422 with the reason, plus the circle's `seq` and `head`. On `stale_head` or `bad_wraps` the sender fetches the log and builds the envelope again with a new `seq`. The same bytes again answer 201 with the `received_at` of the first upload; different bytes under a stored `(sender, seq)` are 422 `replay`. A `Kinfold-Wake` other than `notify` or `locate`, or `locate` on a circle envelope, is 400.
 
 **`Kinfold-Wake`** asks the server to wake recipients that have no open stream (spec §14.3):
 
@@ -216,7 +224,7 @@ Phones notice on their own: an envelope whose `log_head` the server doesn't know
 
 A recipient with an open stream gets the record at once whatever the header says.
 
-**Delivery records.** A record is `u64 received_at ‖ envelope`: the server's clock when it stored the envelope, then the envelope unchanged. The inbox is per device and covers all its circles. The response headers are `Kinfold-Cursor`, an opaque token to pass as `since` next time, and `Kinfold-More: 1` when more records wait. Fetching deletes nothing; a record stays until its envelope's `ttl_s` runs out, counted from `received_at`. Leave `since` out to get everything still stored.
+**Delivery records.** A record is `u64 received_at ‖ envelope`: the server's clock when it stored the envelope, then the envelope unchanged. The inbox is per device and covers all its circles. The response headers are `Kinfold-Cursor`, an opaque token to pass as `since` next time (sent even when no record is, so a device keeps its place), and `Kinfold-More: 1` when more records wait. Records come only from circles in which the device is still an active receiving device. Fetching deletes nothing; a record stays until its envelope's `ttl_s` runs out, counted from `received_at`. Leave `since` out to get everything still stored.
 
 **The stream** is a WebSocket. Phones send `Authorization` with the upgrade request; browsers reach it through `kinfold-web`. Every message is binary: one type byte, then the body.
 
@@ -292,10 +300,10 @@ It alerts once per silence and is armed again when the device is next heard.
 | `GET /v1/invites/{invite_id}/result?wait={s}` | P | — | 200 with the `JoinResult`, or 204 when there is none yet |
 | `DELETE /v1/invites/{invite_id}` | P | — | 204 |
 
-- **Creating.** The caller MUST be an admin of the circle, which the server can see. `expires_at` is at most 7 days away. With `"reg_token": true`, on a server with `member_tokens`, the answer carries a single-use registration token that expires with the invite; the inviter puts it in the invite (spec §9.1). Without that feature the operator issues tokens.
-- **Requests.** Any registered phone or tablet that knows the invite ID may post one. The server can't read it. The inviter's phones get a `join_request` event, or a wake-up when they are offline. Only devices of the inviter's account may read requests, write the result or delete the invite; any admin of the circle may also delete it.
-- **Result.** Written once. The device that posted a request may read it, waiting up to 25 seconds per call (`wait`).
-- **Ending.** The server deletes an invite and its requests when an `ADD_MEMBER` with that `invite_id` is appended, at `expires_at`, or on `DELETE`. A result is kept for 24 hours after it is written.
+- **Creating.** The caller MUST be an admin of the circle, which the server can see (403 otherwise). `expires_at` is in the future and at most 7 days away (400 otherwise). With `"reg_token": true`, on a server with `member_tokens`, the answer carries a single-use registration token that expires with the invite; the inviter puts it in the invite (spec §9.1). Without that feature the invite is made all the same and the answer carries no token: the operator issues tokens. Posting the same invite again succeeds and keeps its requests and the `expires_at` it was first given; with `"reg_token": true` it returns a new token, and the one before stops working. An invite ID that another circle or account uses is 409 `slot_taken`.
+- **Requests.** Any registered phone or tablet that knows the invite ID may post one. The server can't read it, but checks its clear part: version 0, the invite ID of the path, a nonce and one ciphertext (422 `malformed` otherwise). The same request twice is stored once; a fourth waiting request gets 429. The inviter's phones get a `join_request` event, or a wake-up when they are offline. Only devices of the inviter's account may read requests or write the result (403 otherwise); they or any admin of the circle may delete the invite.
+- **Result.** Written once: the same bytes again succeed, different bytes are 409 `slot_taken`. A device that posted a request may read it (403 for any other), waiting up to 25 seconds per call (`wait`).
+- **Ending.** When an `ADD_MEMBER` with that `invite_id` is appended, the server deletes the invite's requests and takes no more (410 `gone`), but keeps the result slot open: the inviter appends the entry first and posts the result after it (spec §9.2). The invite ends at `expires_at` if no result was written, 24 hours after its result was written, on `DELETE`, or when the inviter's account leaves the circle or is removed from it; after that every call about it gets 410 `gone`. A registration token minted with the invite stops working once the invite is used or ends.
 
 ---
 
@@ -466,6 +474,18 @@ Removing a device on the server cuts off its sessions and deliveries at once. It
 
 The web console adds its own protections, since a console on `localhost` is a known target for DNS rebinding: it checks `Host` and `Origin` on every request, uses anti-forgery tokens, and opens only through a one-time link from the command line.
 
+**What exists so far.** The socket (`admin.sock` in the server's data directory, mode 0600) speaks JSON over HTTP:
+
+| Method and path | Command line | Does |
+| --- | --- | --- |
+| `POST /setup` | `kinfold setup [--expires 24h]` | A registration token and the setup code carrying it, with the server's URL and key |
+| `POST /tokens`, `GET /tokens`, `DELETE /tokens/{id}` | `kinfold token create\|list\|revoke` | Registration tokens; only their hashes are kept, and `id` is the first 8 bytes of the hash in hex |
+| `GET /settings`, `PATCH /settings` | `kinfold settings [--member-tokens on\|off] [--web-devices on\|off]` | `member_tokens` and `web_devices` |
+| `POST /repair`, `DELETE /repair` | `kinfold repair start [--hours 72]\|end` | Repair mode (§6), at most 72 hours |
+| `PUT /operators/{account_id}`, `DELETE …` | `kinfold operator add\|remove ACCOUNT_ID` | Who may read `/v1/server/status` |
+
+The setup code is printed as text for now, with the server key in base64url.
+
 ---
 
 ## 17. Open items
@@ -475,3 +495,5 @@ The web console adds its own protections, since a console on `localhost` is a kn
 - **Quotas.** What a phone is told, and shows, when a circle's stored envelopes hit the limit.
 - **Relay abuse limits** and whether registering with the relay should need Apple's app attestation.
 - **Federation** between servers is out of scope for v0.
+- **The server key's fingerprint.** Spec §13.1 asks apps that let a person type an address to show the server key's fingerprint for comparison with the command line's, but defines no format. The command line prints the whole key in base64url until it does.
+- **Restoring registrations.** Repair mode (§6) restores logs. Devices and accounts registered after the backup are lost with it; how they register again, without new tokens for everyone, is still to be settled.

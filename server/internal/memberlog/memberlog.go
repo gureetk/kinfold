@@ -71,6 +71,18 @@ type Entry struct {
 	Sig       []byte
 }
 
+// InviteID is the invite_id of an ADD_MEMBER entry, and nil for any other entry.
+func (e *Entry) InviteID() []byte {
+	if e.Type != AddMember {
+		return nil
+	}
+	b, ok := parseBody(e.Type, e.Body)
+	if !ok {
+		return nil
+	}
+	return b.invite
+}
+
 // Hash is the entry hash, H("log-hash", the entire entry).
 func Hash(raw []byte) []byte { return kcrypto.H("log-hash", raw) }
 

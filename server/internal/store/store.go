@@ -1,0 +1,181 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+// Package store is what the server keeps (API.md §15), behind an interface: an in-memory
+// implementation for now (memstore), SQLite later. All access goes through transactions,
+// so that a check and the write it guards are atomic.
+package store
+
+import (
+	"errors"
+
+	"github.com/gureetk/kinfold/server/internal/memberlog"
+)
+
+// ErrNotFound is returned by lookups that find nothing.
+var ErrNotFound = errors.New("not found")
+
+// Store opens transactions.
+type Store interface {
+	// Update runs fn in a read-write transaction. If fn returns an error, nothing it
+	// wrote is kept. Transactions don't overlap.
+	Update(fn func(Tx) error) error
+	// View runs fn in a read-only transaction.
+	View(fn func(Tx) error) error
+}
+
+// Settings are what the operator switches on and off (API.md §16).
+type Settings struct {
+	MemberTokens bool   // admins may mint registration tokens with invites (§9)
+	WebDevices   bool   // web and Home Assistant devices may be registered (§5)
+	RepairUntil  uint64 // repair mode lasts until this time (ms); 0 when off (§6)
+}
+
+// Token is a registration token. Only its hash is kept.
+type Token struct {
+	Hash      []byte // SHA-256 of the token
+	CreatedAt uint64
+	ExpiresAt uint64
+	Spent     bool
+	Invite    []byte // the invite it came with (member tokens), if any
+}
+
+// Account is a registered account.
+type Account struct {
+	ID        []byte
+	IK        []byte // the current identity key
+	Chain     []byte // the identity chain that leads to it
+	Operator  bool
+	CreatedAt uint64
+}
+
+// Device is a registered device.
+type Device struct {
+	ID         []byte
+	Account    []byte
+	Kind       uint8
+	DSK        []byte
+	Cert       []byte
+	Bundle     []byte // nil for a recovery device
+	CreatedAt  uint64
+	LastSeenAt uint64
+}
+
+// Challenge is a login challenge (§13.2), used once.
+type Challenge struct {
+	Challenge []byte
+	Device    []byte
+	ExpiresAt uint64
+}
+
+// Session is a logged-in device. Only the token's hash is kept.
+type Session struct {
+	Hash      []byte
+	Device    []byte
+	ExpiresAt uint64
+}
+
+// Circle is a circle's public state. State is never changed in place: appending an entry
+// stores a new one.
+type Circle struct {
+	ID        []byte
+	State     *memberlog.State
+	CreatedAt uint64
+}
+
+// Removal lets a removed device read the log up to the entry that removed it (API.md §6).
+type Removal struct {
+	Circle []byte
+	Device []byte
+	Seq    int64  // the entry that removed it
+	At     uint64 // when it was appended
+}
+
+// Envelope is a stored envelope with its delivery details.
+type Envelope struct {
+	Seq        uint64 // store-wide order of arrival; set by PutEnvelope
+	Circle     []byte
+	Sender     []byte
+	Recipients [][]byte
+	ReceivedAt uint64
+	ExpiresAt  uint64 // received_at + ttl_s
+	Raw        []byte
+}
+
+// SeenRecord is what the replay record keeps for an envelope it stored.
+type SeenRecord struct {
+	Digest     [32]byte // SHA-256 of the envelope
+	ReceivedAt uint64
+	KeepUntil  uint64 // 32 days after sent_at (API.md §15)
+}
+
+// Invite is an invite's mailbox (API.md §9).
+type Invite struct {
+	ID        []byte
+	Circle    []byte
+	Account   []byte // the inviter's account
+	ExpiresAt uint64
+	Requests  [][]byte // join requests waiting
+	Askers    [][]byte // devices that posted a request; they may read the result
+	Used      bool     // its ADD_MEMBER is in the log: no more requests
+	Result    []byte
+	ResultAt  uint64
+	Ended     bool // deleted or expired: kept only to answer 410
+}
+
+// Tx is a transaction.
+type Tx interface {
+	Settings() (Settings, error)
+	PutSettings(Settings) error
+
+	PutToken(Token) error
+	Token(hash []byte) (Token, error)
+	Tokens() ([]Token, error)
+	DeleteToken(hash []byte) error
+
+	PutAccount(Account) error
+	Account(id []byte) (Account, error)
+	DeleteAccount(id []byte) error
+
+	PutDevice(Device) error
+	Device(id []byte) (Device, error)
+	DevicesOf(account []byte) ([]Device, error)
+	DeleteDevice(id []byte) error
+
+	PutChallenge(Challenge) error
+	// TakeChallenge returns the challenge and removes it, so it works once.
+	TakeChallenge(challenge []byte) (Challenge, error)
+
+	PutSession(Session) error
+	Session(hash []byte) (Session, error)
+	DeleteSession(hash []byte) error
+	DeleteSessionsOf(device []byte) error
+
+	// CreateCircle stores a circle and its GENESIS entry.
+	CreateCircle(c Circle, genesis []byte) error
+	Circle(id []byte) (Circle, error)
+	// AppendEntry stores raw as entry s.Seq and s as the circle's state.
+	AppendEntry(circle, raw []byte, s *memberlog.State) error
+	// Entries returns entries after seq `after`, in order, at most limit of them and no
+	// more than maxBytes in all (but at least one).
+	Entries(circle []byte, after int64, limit, maxBytes int) ([][]byte, error)
+	// SeqOf finds an entry hash in a circle's log.
+	SeqOf(circle, hash []byte) (int64, bool, error)
+	// CirclesOf lists the circles in which the account is a member.
+	CirclesOf(account []byte) ([]Circle, error)
+	PutRemoval(Removal) error
+	Removal(circle, device []byte) (Removal, error)
+
+	// PutEnvelope stores an envelope and returns its Seq.
+	PutEnvelope(Envelope) (uint64, error)
+	// Inbox returns, in order of arrival, envelopes after Seq `after` addressed to device
+	// in one of the circles, unexpired at now: at most limit, no more than maxBytes (but at
+	// least one), and whether more wait.
+	Inbox(device []byte, circles [][]byte, after uint64, limit, maxBytes int, now uint64) ([]Envelope, bool, error)
+	// Seen is the replay record of a circle (§7.5).
+	Seen(circle, sender []byte, seq uint64) (SeenRecord, bool, error)
+	PutSeen(circle, sender []byte, seq uint64, r SeenRecord) error
+
+	PutInvite(Invite) error
+	Invite(id []byte) (Invite, error)
+	InvitesOf(circle []byte) ([]Invite, error)
+}
