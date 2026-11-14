@@ -265,7 +265,8 @@ func (s *Server) append(q *request, repairPath bool) error {
 }
 
 // afterAppend applies the public effects an entry has outside the log (API.md §6): removed
-// devices keep read access to their removal only, and a spent invite takes no more requests.
+// devices keep read access to their removal only, watches on them end, and a spent invite
+// takes no more requests.
 func (s *Server) afterAppend(q *request, tx store.Tx, circle []byte, old, ns *memberlog.State, e *memberlog.Entry) error {
 	for _, m := range old.Members {
 		for _, d := range m.Devices {
@@ -296,6 +297,9 @@ func (s *Server) afterAppend(q *request, tx store.Tx, circle []byte, old, ns *me
 				}
 			}
 		}
+	}
+	if err := s.endWatches(q, tx, circle, ns); err != nil {
+		return err
 	}
 	if e.Type != memberlog.AddMember {
 		return nil

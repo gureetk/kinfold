@@ -124,6 +124,22 @@ type Invite struct {
 	Ended     bool // deleted or expired: kept only to answer 410
 }
 
+// Watch is a silence watch (API.md §8): one per circle, watched device and watcher account.
+type Watch struct {
+	Circle   []byte
+	Device   []byte // the watched phone or tablet
+	Watcher  []byte // the watcher's account
+	Grant    []byte // the WatchGrant that allows it
+	AfterMin uint16
+	NotAfter uint64
+	Since    uint64 // when the current silence began
+	WokeAt   uint64 // when the device was woken in this silence; 0 before that
+	Alerted  bool   // the watcher has been told of this silence
+	// Revoked: the watched account deleted it. It stays until NotAfter, inactive, so that
+	// its grant can't be registered again.
+	Revoked bool
+}
+
 // Tx is a transaction.
 type Tx interface {
 	Settings() (Settings, error)
@@ -182,12 +198,25 @@ type Tx interface {
 	Invite(id []byte) (Invite, error)
 	InvitesOf(circle []byte) ([]Invite, error)
 
+	PutWatch(Watch) error
+	Watch(circle, device, watcher []byte) (Watch, error)
+	// WatchesIn lists a circle's watches, Watches every watch; both by device, then watcher.
+	WatchesIn(circle []byte) ([]Watch, error)
+	Watches() ([]Watch, error)
+	DeleteWatch(circle, device, watcher []byte) error
+	// Heard records that the device stored a circle envelope at `at`; the silence of every
+	// watch on it starts again from then.
+	Heard(circle, device []byte, at uint64) error
+	// LastHeard is when the device last stored a circle envelope, if the store knows.
+	LastHeard(circle, device []byte) (uint64, bool, error)
+
 	// Sweep deletes what has run out by now (API.md §15) and counts what it deleted.
 	Sweep(now uint64, r Retention) (Swept, error)
 }
 
 // Retention is how long the server keeps what has ended, in milliseconds. Everything else
-// goes when it expires: challenges, sessions, tokens, envelopes and replay records.
+// goes when it expires: challenges, sessions, tokens, envelopes, replay records and revoked
+// watches. (Watches that are still active end in the silence check, which tells the watcher.)
 type Retention struct {
 	Removals      uint64 // a removed device may read the log for this long (API.md §6)
 	Results       uint64 // a join result, after it is written (§9)
@@ -196,5 +225,5 @@ type Retention struct {
 
 // Swept counts what a sweep deleted.
 type Swept struct {
-	Challenges, Sessions, Tokens, Envelopes, Seen, Removals, Invites, Circles int
+	Challenges, Sessions, Tokens, Envelopes, Seen, Removals, Invites, Watches, Circles int
 }

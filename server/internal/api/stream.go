@@ -26,6 +26,7 @@ const (
 	msgRecord = 0x01
 	msgCursor = 0x02
 	msgLog    = 0x03
+	msgPush   = 0x04
 	msgEvent  = 0x05
 	msgTime   = 0x06
 )
@@ -68,8 +69,8 @@ func (t StreamTimes) withDefaults() StreamTimes {
 	return t
 }
 
-// maxEvents is how many events may wait for a slow connection; later ones are dropped. They
-// are hints, each confirmed by a fetch.
+// maxEvents is how many events and pushes may wait for a slow connection; later ones are
+// dropped. Events are hints, each confirmed by a fetch.
 const maxEvents = 64
 
 // stream is a device's open WebSocket. Records aren't queued: a stream is woken and reads
@@ -128,15 +129,23 @@ func (st *stream) event(ev map[string]any) {
 	if err != nil {
 		return
 	}
+	st.queue(append([]byte{msgEvent}, b...))
+}
+
+// push queues a Push (PROTOCOL.md §14.2), signed but not sealed: a silence alert.
+func (st *stream) push(p []byte) { st.queue(append([]byte{msgPush}, p...)) }
+
+func (st *stream) queue(msg []byte) {
 	st.mu.Lock()
 	if len(st.events) < maxEvents {
-		st.events = append(st.events, append([]byte{msgEvent}, b...))
+		st.events = append(st.events, msg)
 	}
 	st.mu.Unlock()
 	ring(st.note)
 }
 
-// notes takes the events and log frames waiting, events first, log frames by circle.
+// notes takes the events, pushes and log frames waiting: events and pushes in order, then
+// log frames by circle.
 func (st *stream) notes() [][]byte {
 	st.mu.Lock()
 	defer st.mu.Unlock()

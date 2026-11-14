@@ -131,6 +131,7 @@ func serve(args []string) error {
 	}()
 	slog.Info("serving", "url", *url, "listen", *listen, "admin", sock)
 	go janitor(handler)
+	go silenceCheck(handler)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
@@ -161,6 +162,15 @@ func janitor(s *api.Server) {
 				"circles", n.Circles)
 		}
 		time.Sleep(time.Hour)
+	}
+}
+
+// silenceCheck runs the silence check of API.md §8 every minute.
+func silenceCheck(s *api.Server) {
+	for range time.Tick(time.Minute) {
+		if err := s.CheckSilences(); err != nil {
+			slog.Error("silence check failed", "err", err)
+		}
 	}
 }
 

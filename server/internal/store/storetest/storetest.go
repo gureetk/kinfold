@@ -27,6 +27,7 @@ func Run(t *testing.T, open func(t *testing.T) store.Store) {
 		{"ClosedCircle", closedCircle},
 		{"Envelopes", envelopes},
 		{"Invites", invites},
+		{"Watches", watches},
 		{"FailedUpdateLeavesNothing", failedUpdate},
 		{"PanicLeavesNothing", panicking},
 		{"Sweep", sweeping},
@@ -410,6 +411,75 @@ func invites(t *testing.T, s store.Store) {
 	})
 }
 
+func watches(t *testing.T, s store.Store) {
+	w := func(c, d, by byte) store.Watch {
+		return store.Watch{Circle: id(c), Device: id(d), Watcher: id(by), Grant: []byte{c, d, by}, AfterMin: 15, NotAfter: 1 << 40,
+			Since: 5}
+	}
+	update(t, s, func(tx store.Tx) error {
+		for _, v := range []store.Watch{w(1, 3, 9), w(1, 2, 9), w(1, 2, 8), w(2, 2, 9)} {
+			must(t, tx.PutWatch(v))
+		}
+		v := w(1, 3, 7)
+		v.WokeAt, v.Alerted, v.Revoked = 6, true, true
+		return tx.PutWatch(v)
+	})
+	view(t, s, func(tx store.Tx) error {
+		in, _ := tx.WatchesIn(id(1))
+		var order []byte
+		for _, v := range in {
+			order = append(order, v.Device[0], v.Watcher[0])
+		}
+		if !bytes.Equal(order, []byte{2, 8, 2, 9, 3, 7, 3, 9}) {
+			t.Errorf("watches in a circle, by device then watcher: %v", order)
+		}
+		if all, _ := tx.Watches(); len(all) != 5 {
+			t.Errorf("%d watches in all", len(all))
+		}
+		got, err := tx.Watch(id(1), id(3), id(7))
+		want := w(1, 3, 7)
+		want.WokeAt, want.Alerted, want.Revoked = 6, true, true
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("watch: %+v %v", got, err)
+		}
+		if _, err := tx.Watch(id(1), id(3), id(6)); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("a missing watch: %v", err)
+		}
+		if _, ok, err := tx.LastHeard(id(1), id(2)); ok || err != nil {
+			t.Error("heard before anything was")
+		}
+		return nil
+	})
+	// Hearing from a device starts the silence of every watch on it over, in that circle.
+	update(t, s, func(tx store.Tx) error {
+		v := w(1, 2, 9)
+		v.WokeAt, v.Alerted = 7, true
+		must(t, tx.PutWatch(v))
+		return tx.Heard(id(1), id(2), 50)
+	})
+	view(t, s, func(tx store.Tx) error {
+		for _, k := range [][3]byte{{1, 2, 9}, {1, 2, 8}} {
+			if v, _ := tx.Watch(id(k[0]), id(k[1]), id(k[2])); v.Since != 50 || v.WokeAt != 0 || v.Alerted {
+				t.Errorf("watch %v after the device was heard: %+v", k, v)
+			}
+		}
+		if v, _ := tx.Watch(id(2), id(2), id(9)); v.Since != 5 {
+			t.Error("hearing in one circle reset a watch in another")
+		}
+		if at, ok, _ := tx.LastHeard(id(1), id(2)); !ok || at != 50 {
+			t.Errorf("last heard: %d %v", at, ok)
+		}
+		return nil
+	})
+	update(t, s, func(tx store.Tx) error { return tx.DeleteWatch(id(1), id(2), id(8)) })
+	view(t, s, func(tx store.Tx) error {
+		if _, err := tx.Watch(id(1), id(2), id(8)); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("a deleted watch: %v", err)
+		}
+		return nil
+	})
+}
+
 // A transaction that fails leaves nothing behind, whatever it wrote.
 func failedUpdate(t *testing.T, s store.Store) {
 	raws := entries(t, "")
@@ -558,6 +628,13 @@ func sweeping(t *testing.T, s store.Store) {
 		}
 		must(t, tx.PutSeen(cid, id(1), 1, store.SeenRecord{KeepUntil: now + 9}))
 		must(t, tx.PutRemoval(store.Removal{Circle: cid, Device: id(1), At: now}))
+		must(t, tx.PutWatch(store.Watch{Circle: cid, Device: id(1), Watcher: id(2), Grant: []byte{1}, NotAfter: now + 9}))
+		must(t, tx.Heard(cid, id(1), now))
+		// A revoked watch goes when its grant would have run out; an active one is left to the
+		// silence check, which tells the watcher.
+		must(t, tx.PutWatch(store.Watch{Circle: oid, Device: id(1), Watcher: id(2), Grant: []byte{1}, NotAfter: now, Revoked: true}))
+		must(t, tx.PutWatch(store.Watch{Circle: oid, Device: id(1), Watcher: id(3), Grant: []byte{1}, NotAfter: now + 1, Revoked: true}))
+		must(t, tx.PutWatch(store.Watch{Circle: oid, Device: id(1), Watcher: id(4), Grant: []byte{1}, NotAfter: now}))
 		return tx.PutInvite(store.Invite{ID: id(99), Circle: cid, Account: id(3), ExpiresAt: now + 9})
 	})
 	// Before the closed circle's time is up, nothing has run out.
@@ -567,7 +644,7 @@ func sweeping(t *testing.T, s store.Store) {
 		t.Errorf("swept %+v before anything ran out", n)
 	}
 	update(t, s, func(tx store.Tx) (err error) { n, err = tx.Sweep(now, r); return })
-	want := store.Swept{Challenges: 1, Sessions: 1, Tokens: 1, Envelopes: 2, Seen: 2, Removals: 2, Invites: 3, Circles: 1}
+	want := store.Swept{Challenges: 1, Sessions: 1, Tokens: 1, Envelopes: 2, Seen: 2, Removals: 2, Invites: 3, Watches: 2, Circles: 1}
 	if n != want {
 		t.Errorf("swept %+v, want %+v", n, want)
 	}
@@ -601,6 +678,12 @@ func sweeping(t *testing.T, s store.Store) {
 		}
 		if _, err := tx.Circle(oid); err != nil {
 			t.Errorf("the open circle: %v", err)
+		}
+		if ws, _ := tx.Watches(); len(ws) != 2 {
+			t.Errorf("%d watches left, want the revoked one not yet run out and the active one", len(ws))
+		}
+		if _, ok, _ := tx.LastHeard(cid, id(1)); ok {
+			t.Error("the closed circle's heard times stayed")
 		}
 		return nil
 	})
