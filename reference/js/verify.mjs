@@ -408,9 +408,9 @@ for (const c of L.cases) {
     check(`case ${c.name}: its last entry shows the state it leaves, unless that entry is fatal`, ('state_after' in last) === (last.result !== 'fatal'));
   });
 }
-checkEq('case counts by the outcome of the last entry (spec/vectors/README.md)', caseCounts, { fatal: 99, rejected: 21, accepted: 32, deferred: 1 });
+checkEq('case counts by the outcome of the last entry (spec/vectors/README.md)', caseCounts, { fatal: 99, rejected: 21, accepted: 33, deferred: 1 });
 checkEq('case counts by starting point: empty log, base log, whole log',
-  [caseBases[-1], caseBases[L.base_seq], caseBases[L.final_seq]], [9, 95, 49]);
+  [caseBases[-1], caseBases[L.base_seq], caseBases[L.final_seq]], [9, 96, 49]);
 
 // ---------------------------------------------------------------------------
 // Epoch wraps: every recipient opens its wrap and checks the commitment

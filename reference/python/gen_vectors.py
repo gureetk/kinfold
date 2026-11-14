@@ -40,6 +40,7 @@ def rnd(tag: str, n: int = 32) -> bytes:
 
 T0 = 1_793_635_200_000          # 2026-11-02T16:00:00Z
 MIN, HOUR, DAY = 60_000, 3_600_000, 86_400_000
+U64_MAX = 2 ** 64 - 1           # the last millisecond a u64 can hold
 TEEN_UNTIL = 1_939_248_000_000  # 2031-06-15T00:00:00Z
 SERVER_URL = "https://family.example"
 LINK_BASE = "https://link.kinfold.example"
@@ -808,6 +809,13 @@ def c_bundle_low_order(b):
            "a bundle whose encryption key is a low-order point nobody could seal to", "fatal", "bad_bundle")
 
 
+def c_bundle_end_of_time(b):
+    t = U64_MAX - 2 * MIN                        # the entry's created_at
+    last = idn.make_bundle(ap.dsk, A.acc, x25519_public(rnd("alex/phone/dek/end-of-time")), t - MIN, U64_MAX)
+    simple(b, lg.UPDATE_KEY, ap, last, "an entry and a bundle in the last minutes a u64 can hold: valid and current, "
+           "though not_before + 35 days and created_at + 10 minutes both pass 2^64", created_at=t)
+
+
 def c_bundle_features(b):
     simple(b, lg.UPDATE_KEY, ap, fresh_bundle(b, ap, "alex/phone/dek/features", proto_max=3, features=0x80000001),
            "a bundle advertising protocol version 3 and feature bits this version doesn't know: still valid")
@@ -919,6 +927,8 @@ CASES = [
     ("accepted_bundle_starts_10_minutes_ahead", "the edge of \"current\"", c_bundle_edge),
     ("fatal_bundle_low_order_key", "key bundle with an invalid X25519 key", c_bundle_low_order),
     ("accepted_bundle_unknown_features", "proto_max and features never affect validity", c_bundle_features),
+    ("accepted_bundle_at_end_of_time", "times at the top of the u64 range, which a check written as a sum gets wrong",
+     c_bundle_end_of_time),
     ("fatal_bad_wraps", "epoch wraps miss a device", c_bad_wraps),
     ("fatal_last_admin", "last admin leaves", c_last_admin),
     ("fatal_last_device", "account's last device removed", c_last_device),
@@ -1384,6 +1394,9 @@ bad("expired", "sent 31 days and 1 ms before the receiver's clock",
     env("ex", jp, 1, both, LOC, sent_at=RECEIVER_NOW - 31 * DAY - 1)[0], ap, "expired")
 bad("bad_time", "sent more than a day after the receiver's clock",
     env("ft", jp, 1, both, LOC, sent_at=RECEIVER_NOW + DAY + 1)[0], ap, "bad_time")
+bad("bad_time_end_of_time", "sent at the last millisecond a u64 can hold: far ahead of the receiver's clock, though "
+    "sent_at + 31 days, wrapped around, would look long past", env("et", jp, 1, both, LOC, sent_at=U64_MAX)[0], ap,
+    "bad_time")
 bad("bad_wraps", "wraps not sorted by device ID", env("ro", jp, 1, both, LOC, reorder=True)[0], ap, "bad_wraps")
 bad("bad_wraps_none", "no wraps at all", env("nw", jp, 2, [], LOC)[0], ap, "bad_wraps")
 crowd = [(rnd(f"crowd/{i}", 16), x25519_public(rnd(f"crowd/{i}/dek"))) for i in range(254)]
