@@ -6,6 +6,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -98,6 +101,16 @@ func opened(t *testing.T, server []byte, d *device, c relayCall) (uint8, []byte)
 		[]byte{codes[c.Delivery]}), sig) {
 		t.Fatalf("the relay call: %d bytes, signature", len(sealed))
 	}
+	return openSealed(t, server, d, sealed, c.SentAt)
+}
+
+// openSealed opens a sealed push with the device's key from the vectors, and checks the
+// server's signature for that device.
+func openSealed(t *testing.T, server []byte, d *device, sealed []byte, sentAt uint64) (uint8, []byte) {
+	t.Helper()
+	if len(sealed) != push.SealedLen {
+		t.Fatalf("a sealed push of %d bytes", len(sealed))
+	}
 	var sk []byte
 	for _, p := range tv.Obj(tv.Load(t)["identities"]) {
 		for _, dv := range tv.Obj(tv.Obj(p)["devices"]) {
@@ -122,10 +135,10 @@ func opened(t *testing.T, server []byte, d *device, c relayCall) (uint8, []byte)
 		t.Fatal("the push's padding")
 	}
 	r := wire.NewReader(p)
-	ver, ptype, sentAt, body := r.U8(), r.U8(), r.U64(), r.Vec16()
+	ver, ptype, at, body := r.U8(), r.U8(), r.U64(), r.Vec16()
 	tbs := p[:r.Pos()]
 	psig := r.Take(64)
-	if !r.Done() || ver != 0 || sentAt != c.SentAt || !kcrypto.Verify(server, "push-sig", wire.Concat(d.id, tbs), psig) {
+	if !r.Done() || ver != 0 || at != sentAt || !kcrypto.Verify(server, "push-sig", wire.Concat(d.id, tbs), psig) {
 		t.Fatal("the push: not signed by the server for this device")
 	}
 	return ptype, body
@@ -246,8 +259,9 @@ func TestPushRegistration(t *testing.T) {
 		}
 		return nil, errors.New("no such host")
 	}
+	vapid, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	l := newLive(t, generous, api.StreamTimes{}, func(c *api.Config) {
-		c.Push.Resolve, c.Push.Hosts = resolve, []string{"home.lan"}
+		c.Push.Resolve, c.Push.Hosts, c.Push.VAPID = resolve, []string{"home.lan"}, vapid
 	})
 	maya := byLabel(l.devs, "maya/phone")
 	tok := l.login(maya)
@@ -275,11 +289,16 @@ func TestPushRegistration(t *testing.T) {
 
 	// With HostsOnly, every host off the list is refused.
 	l2 := newLive(t, generous, api.StreamTimes{}, func(c *api.Config) {
-		c.Push.Resolve, c.Push.Hosts, c.Push.HostsOnly = resolve, []string{"home.lan"}, true
+		c.Push.Resolve, c.Push.Hosts, c.Push.HostsOnly, c.Push.VAPID = resolve, []string{"home.lan"}, true, vapid
 	})
 	tok = l2.login(byLabel(l2.devs, "maya/phone"))
 	expect(t, l2.json("PUT", "/v1/push", web("https://push.example/x"), tok), http.StatusBadRequest, "bad_request")
 	expect(t, l2.json("PUT", "/v1/push", web("https://home.lan/x"), tok), http.StatusNoContent, "")
+
+	// Without a VAPID key, a server takes no Web Push registrations.
+	l3 := newLive(t, generous, api.StreamTimes{}, func(c *api.Config) { c.Push.Resolve = resolve })
+	expect(t, l3.json("PUT", "/v1/push", web("https://push.example/x"), l3.login(byLabel(l3.devs, "maya/phone"))),
+		http.StatusForbidden, "forbidden")
 }
 
 // A wake-up past its limit refuses the upload: nothing is stored.
