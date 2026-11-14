@@ -385,7 +385,7 @@ A device with an open stream needs no push. Android phones keep a stream by defa
 ```
 
 - **`relay`** is the App Store build's route. The capabilities come from the relay (§14), as base64url. `locate` is present when the app has Apple's location-push entitlement and the person has allowed location all the time. A server with no relay configured refuses it (403).
-- **`webpush`** is UnifiedPush. The server sends the sealed push as a Web Push message (RFC 8030) of one record, encrypted to `p256dh` and `auth` (RFC 8291) and signed with its VAPID key (RFC 8292). The VAPID token's audience is the endpoint's origin, it expires within 12 hours, and its subject is the server's URL, so the push host learns that URL. A server without a VAPID key refuses it (403).
+- **`webpush`** is UnifiedPush. The server sends the sealed push as a Web Push message (RFC 8030) of one record, encrypted to `p256dh` and `auth` (RFC 8291) and signed with its VAPID key (RFC 8292). The VAPID token's audience is the endpoint's origin, it expires within 12 hours, and its subject is the server's URL, so the push host learns that URL. RFC 8292 makes the subject optional, but Mozilla's push service, which the Sunup distributor uses, refuses a token without one. A server without a VAPID key refuses it (403).
 - **`apns`** exists only on a server that holds its own Apple key, for families who build the iOS app themselves; any other server refuses it (403).
 - **Who.** Any receiving device (403 for a recovery device). A registration that breaks a rule here, or the rules for push addresses below, is 400.
 

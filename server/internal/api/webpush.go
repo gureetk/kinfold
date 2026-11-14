@@ -88,7 +88,9 @@ func ece(plaintext, uaPublic, authSecret, salt []byte, as *ecdh.PrivateKey) ([]b
 
 // vapid is the Authorization header of RFC 8292 for a push to an endpoint: a JWT signed
 // with ES256 whose audience is the endpoint's origin, which expires in 12 hours and names
-// the server's URL as its contact, and the server's VAPID public key.
+// the server's URL as its contact, and the server's VAPID public key. RFC 8292 makes the
+// contact (sub) optional, but Mozilla's push service, which the Sunup distributor uses,
+// refuses a token without one.
 func (s *Server) vapid(endpoint *url.URL, now uint64) (string, error) {
 	key := s.cfg.Push.VAPID
 	claims, err := json.Marshal(map[string]any{"aud": origin(endpoint), "exp": now/1000 + vapidLife, "sub": s.cfg.URL})
