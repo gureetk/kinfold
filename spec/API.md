@@ -1,6 +1,6 @@
 # Kinfold HTTP API, version 0
 
-**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §7 except the stream, §9, and the part of §16 that a first device needs.
+**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §7 (all but the `push` message and `stream_post`), §9, and the part of §16 that a first device needs.
 **License:** [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 Section numbers written "spec §…" point into PROTOCOL.md. Where the two documents disagree about bytes, the spec wins.
@@ -106,6 +106,7 @@ Default rate limits. The operator can change them; clients MUST handle 429 at an
 | Login challenges | 10 a minute per device ID, 60 a minute per address |
 | Log appends | 30 an hour per device, 500 a day per circle |
 | Envelopes | 20 a minute and 600 an hour per device |
+| Stream connections | 10 a minute per device; the next is closed with 4429 |
 | `Kinfold-Wake: notify` | 60 an hour per device |
 | `Kinfold-Wake: locate` | 6 an hour per sender and recipient |
 | Pending invites | 16 per circle; 3 waiting requests per invite |
@@ -226,7 +227,7 @@ A recipient with an open stream gets the record at once whatever the header says
 
 **Delivery records.** A record is `u64 received_at ‖ envelope`: the server's clock when it stored the envelope, then the envelope unchanged. The inbox is per device and covers all its circles. The response headers are `Kinfold-Cursor`, an opaque token to pass as `since` next time (sent even when no record is, so a device keeps its place), and `Kinfold-More: 1` when more records wait. Records come only from circles in which the device is still an active receiving device. Fetching deletes nothing; a record stays until its envelope's `ttl_s` runs out, counted from `received_at`. Leave `since` out to get everything still stored.
 
-**The stream** is a WebSocket. Phones send `Authorization` with the upgrade request; browsers reach it through `kinfold-web`. Every message is binary: one type byte, then the body.
+**The stream** is a WebSocket. Phones send `Authorization` and `Kinfold-Api` with the upgrade request; browsers reach it through `kinfold-web`. A call without a session, from a device that doesn't receive, or with a bad cursor is refused with the usual errors before the upgrade, and a request that isn't a WebSocket upgrade is 400. Every message is binary: one type byte, then the body.
 
 | Type | Direction | Body |
 | --- | --- | --- |
@@ -239,11 +240,11 @@ A recipient with an open stream gets the record at once whatever the header says
 | 0x10 `post` | device → server | `u32 id ‖ u8 wake ‖ envelope`, with wake 0 none, 1 notify, 2 locate. Only with the `stream_post` feature |
 | 0x11 `result` | server → device | `u32 id ‖ u16 status ‖ JSON`: the answer the upload call would have given |
 
-On connecting, the server sends what the inbox holds after `since`, then a `cursor`, then live records as they arrive. A device keeps the last cursor it received and reconnects with it. Devices ping at their own pace with WebSocket pings; the server closes a connection that has been silent both ways for 35 minutes. One device has one stream: a second connection closes the first.
+On connecting, the server sends a `time` message, what the inbox holds after `since`, and a `cursor`. Then it sends live records as they are stored, each batch followed by a `cursor`, and log frames and events as they happen; a connection that falls behind gets only the latest log frame of each circle. A `cursor` message carries the cursor's text, the same as `Kinfold-Cursor`. A device keeps the last cursor it received and reconnects with it. Devices ping at their own pace with WebSocket pings; the server closes a connection on which nothing has come from the device, not even a ping, for 35 minutes. A device sends nothing else: without `stream_post`, a message from it closes the stream with 1008. One device has one stream: a second connection closes the first.
 
 | Close code | Meaning | The device |
 | --- | --- | --- |
-| 4000 | The server is restarting | Reconnects with backoff |
+| 4000 | The server is restarting, or shutting down as the connection arrives | Reconnects with backoff |
 | 4401 | The session ended | Logs in again |
 | 4408 | Idle too long | Reconnects |
 | 4409 | Replaced by a newer connection from the same device | Does nothing |
@@ -252,7 +253,7 @@ On connecting, the server sends what the inbox holds after `since`, then a `curs
 
 Reconnecting backs off from 1 second to 5 minutes, with jitter.
 
-**Events.** Each is `{"type": …}` with the fields shown. They are hints: every one can be confirmed by a fetch.
+**Events.** Each is `{"type": …}` with the fields shown, IDs in base64url. They are hints: every one can be confirmed by a fetch, and a connection that falls far behind may miss some.
 
 | `type` | Fields | Meaning |
 | --- | --- | --- |

@@ -142,7 +142,7 @@ func (s *Server) register(q *request) error {
 
 // deleteAccount is DELETE /v1/accounts/me.
 func (s *Server) deleteAccount(q *request) error {
-	err := s.cfg.Store.Update(func(tx store.Tx) error {
+	err := s.update(q, func(tx store.Tx) error {
 		if err := s.session(q, tx, phone); err != nil {
 			return err
 		}
@@ -158,7 +158,7 @@ func (s *Server) deleteAccount(q *request) error {
 			return err
 		}
 		for _, d := range devs {
-			if err := s.forgetDevice(tx, d.ID); err != nil {
+			if err := s.forgetDevice(q, tx, d.ID); err != nil {
 				return err
 			}
 		}
@@ -171,11 +171,12 @@ func (s *Server) deleteAccount(q *request) error {
 	return nil
 }
 
-// forgetDevice deregisters a device and ends its sessions.
-func (s *Server) forgetDevice(tx store.Tx, id []byte) error {
+// forgetDevice deregisters a device and ends its sessions, and its stream with them.
+func (s *Server) forgetDevice(q *request, tx store.Tx, id []byte) error {
 	if err := tx.DeleteSessionsOf(id); err != nil {
 		return err
 	}
+	q.afterCommit(func() { s.endStream(id, nil) })
 	return tx.DeleteDevice(id)
 }
 
@@ -307,7 +308,7 @@ func (s *Server) deleteDevice(q *request) error {
 	if err != nil {
 		return err
 	}
-	err = s.cfg.Store.Update(func(tx store.Tx) error {
+	err = s.update(q, func(tx store.Tx) error {
 		if err := s.session(q, tx, anyDevice); err != nil {
 			return err
 		}
@@ -319,7 +320,7 @@ func (s *Server) deleteDevice(q *request) error {
 		if err != nil || !bytes.Equal(d.Account, q.dev.Account) {
 			return errNotFound
 		}
-		return s.forgetDevice(tx, id)
+		return s.forgetDevice(q, tx, id)
 	})
 	if err != nil {
 		return err
@@ -435,10 +436,11 @@ func (s *Server) login(q *request) error {
 var errChallengeSpent = errors.New("challenge failed")
 
 func (s *Server) logout(q *request) error {
-	err := s.cfg.Store.Update(func(tx store.Tx) error {
+	err := s.update(q, func(tx store.Tx) error {
 		if err := s.session(q, tx, anyDevice); err != nil {
 			return err
 		}
+		q.afterCommit(func() { s.endStream(q.dev.ID, q.sess.Hash) })
 		return tx.DeleteSession(q.sess.Hash)
 	})
 	if err != nil {

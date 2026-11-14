@@ -71,6 +71,8 @@ type Config struct {
 	Limits Limits
 	// Random is the source of challenges, tokens and session tokens; crypto/rand if nil.
 	Random io.Reader
+	// Stream sets the stream's intervals; zero values take the defaults of API.md §7.
+	Stream StreamTimes
 }
 
 // Server is the HTTP API.
@@ -79,6 +81,7 @@ type Server struct {
 	mux     *http.ServeMux
 	limiter *limiter
 	waits   *hub
+	streams *streams
 	start   uint64
 
 	infoMu sync.Mutex
@@ -91,8 +94,9 @@ func New(cfg Config) *Server {
 	if cfg.Random == nil {
 		cfg.Random = rand.Reader
 	}
+	cfg.Stream = cfg.Stream.withDefaults()
 	s := &Server{cfg: cfg, mux: http.NewServeMux(), limiter: newLimiter(cfg.Limits.withDefaults()), waits: newHub(),
-		start: cfg.Clock.Now()}
+		streams: newStreams(), start: cfg.Clock.Now()}
 	s.routes()
 	return s
 }
@@ -140,6 +144,7 @@ func (s *Server) routes() {
 
 	h("POST /v1/circles/{id}/envelopes", s.postEnvelope)
 	h("GET /v1/inbox", s.inbox)
+	h("GET /v1/stream", s.openStream)
 
 	h("POST /v1/invites", s.createInvite)
 	h("POST /v1/invites/{invite_id}/requests", s.postJoinRequest)
@@ -163,6 +168,27 @@ type request struct {
 	// set by session()
 	sess store.Session
 	dev  store.Device
+	// what happens once the transaction commits (see update)
+	later []func()
+}
+
+// afterCommit asks for f to run once the transaction in progress has committed.
+func (q *request) afterCommit(f func()) { q.later = append(q.later, f) }
+
+// update runs fn in a write transaction, and then what fn asked to happen after it, only
+// if it committed.
+func (s *Server) update(q *request, fn func(store.Tx) error) error {
+	q.later = nil
+	err := s.cfg.Store.Update(fn)
+	later := q.later
+	q.later = nil
+	if err != nil {
+		return err
+	}
+	for _, f := range later {
+		f()
+	}
+	return nil
 }
 
 // serve runs the checks every call shares (API.md §1, §2), then fn.
@@ -398,6 +424,7 @@ type Limits struct {
 	AppendsPerCircle     int // a day
 	EnvelopesPerMinute   int // per device
 	EnvelopesPerHour     int // per device
+	StreamsPerMinute     int // connections, per device
 	PendingInvites       int // per circle
 	WaitingRequests      int // per invite
 }
@@ -414,6 +441,7 @@ func (l Limits) withDefaults() Limits {
 	def(&l.AppendsPerCircle, 500)
 	def(&l.EnvelopesPerMinute, 20)
 	def(&l.EnvelopesPerHour, 600)
+	def(&l.StreamsPerMinute, 10)
 	def(&l.PendingInvites, 16)
 	def(&l.WaitingRequests, 3)
 	return l

@@ -55,13 +55,18 @@ func newStore(t *testing.T) store.Store {
 	return st
 }
 
-func newEnv(t *testing.T, limits api.Limits) *env {
+func newEnv(t *testing.T, limits api.Limits, opts ...func(*api.Config)) *env {
 	seed := sha256.Sum256([]byte("kinfold api test server key"))
 	key := ed25519.NewKeyFromSeed(seed[:])
 	clk := clock.NewFake(1_793_635_200_000)
 	st := newStore(t)
-	e := &env{t: t, clk: clk, srv: api.New(api.Config{URL: url, Key: key, Clock: clk, Store: st, Limits: limits}),
-		adm: (&admin.Admin{Store: st, Clock: clk, Key: key, URL: url}).Handler()}
+	cfg := api.Config{URL: url, Key: key, Clock: clk, Store: st, Limits: limits}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	e := &env{t: t, clk: clk, srv: api.New(cfg)}
+	e.adm = (&admin.Admin{Store: st, Clock: clk, Key: key, URL: url, Notify: e.srv.Notice}).Handler()
+	t.Cleanup(func() { e.srv.CloseStreams(5 * time.Second) })
 	e.admin("PATCH", "/settings", `{"member_tokens": true, "web_devices": true}`)
 	return e
 }
