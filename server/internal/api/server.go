@@ -14,6 +14,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -84,6 +85,10 @@ type Config struct {
 	// DataDir is where the server keeps its files, for the free space it reports; none if
 	// empty.
 	DataDir string
+	// TrustedProxies are the reverse proxies in front of the server. On a connection from
+	// one of them, the client's address for the per-address limits (API.md §3) comes from
+	// X-Forwarded-For; from anywhere else that header is ignored. None if empty.
+	TrustedProxies []netip.Prefix
 }
 
 // Server is the HTTP API.

@@ -3,7 +3,7 @@
 // Command kinfold is the Kinfold server and its operator's command line.
 //
 //	kinfold serve --url https://kinfold.example.org [--listen 127.0.0.1:8080] [--data DIR]
-//	              [--tls-cert FILE --tls-key FILE] [--no-clock-check]
+//	              [--tls-cert FILE --tls-key FILE] [--trusted-proxy ADDRESS,…] [--no-clock-check]
 //	              [--relay https://relay.example] [--push-hosts HOST,…] [--push-hosts-only]
 //	              [--no-webpush] [--search http://127.0.0.1:2322]
 //
@@ -50,6 +50,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"net/netip"
 	neturl "net/url"
 	"os"
 	"os/signal"
@@ -108,6 +109,8 @@ func serve(args []string) error {
 	data := fs.String("data", defaultData, "data directory: server key, database and admin socket")
 	certFile := fs.String("tls-cert", "", "TLS certificate; without it, serve plain HTTP behind a TLS proxy")
 	keyFile := fs.String("tls-key", "", "TLS private key")
+	trustedProxy := fs.String("trusted-proxy", "", "the reverse proxies in front of the server, as addresses or prefixes, comma-separated, "+
+		"such as 127.0.0.1,::1; on their connections, a client's address for the per-address limits comes from X-Forwarded-For")
 	noClock := fs.Bool("no-clock-check", false, "don't ask the kernel whether the clock is synchronized")
 	relay := fs.String("relay", "", "the iOS relay's base URL (API.md §14); without it, iPhones from the App Store get no pushes")
 	pushHosts := fs.String("push-hosts", "", "Web Push hosts allowed without the public-address check, comma-separated")
@@ -131,6 +134,13 @@ func serve(args []string) error {
 		if h = strings.TrimSpace(h); h != "" {
 			hosts = append(hosts, h)
 		}
+	}
+	proxies, err := parseProxies(*trustedProxy)
+	if err != nil {
+		return err
+	}
+	if *certFile == "" && len(proxies) == 0 {
+		slog.Warn("plain HTTP and no --trusted-proxy: every client behind the proxy counts as one address for the per-address limits")
 	}
 	if err := os.MkdirAll(*data, 0o700); err != nil {
 		return err
@@ -160,7 +170,7 @@ func serve(args []string) error {
 	}
 	clk := clock.System{CheckSync: !*noClock}
 	handler := api.New(api.Config{URL: *url, Key: key, Clock: clk, Store: st, Tiles: library, Search: *search, DataDir: *data, Limits: limits,
-		Push: api.PushConfig{Relay: *relay, Hosts: hosts, HostsOnly: *pushHostsOnly, VAPID: vapid}})
+		Push: api.PushConfig{Relay: *relay, Hosts: hosts, HostsOnly: *pushHostsOnly, VAPID: vapid}, TrustedProxies: proxies})
 
 	srv := &http.Server{Addr: *listen, Handler: handler,
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second,
@@ -226,6 +236,33 @@ func everyMinute(s *api.Server) {
 		s.SweepLinks()
 		time.Sleep(time.Minute)
 	}
+}
+
+// parseProxies reads --trusted-proxy: addresses or prefixes, comma-separated. A prefix that
+// covers every address is refused, since it would let any client choose its own address.
+func parseProxies(s string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, f := range strings.Split(s, ",") {
+		if f = strings.TrimSpace(f); f == "" {
+			continue
+		}
+		p, err := netip.ParsePrefix(f)
+		if err != nil {
+			a, err := netip.ParseAddr(f)
+			if err != nil || a.Zone() != "" {
+				return nil, fmt.Errorf("--trusted-proxy: %q is neither an address nor a prefix such as 10.0.0.0/8", f)
+			}
+			p = netip.PrefixFrom(a, a.BitLen())
+		}
+		if a := p.Addr(); a.Is4In6() && p.Bits() >= 96 { // the server reads such addresses as IPv4
+			p = netip.PrefixFrom(a.Unmap(), p.Bits()-96)
+		}
+		if p.Bits() == 0 {
+			return nil, fmt.Errorf("--trusted-proxy: %s would trust every address", f)
+		}
+		out = append(out, p.Masked())
+	}
+	return out, nil
 }
 
 // loadKey reads the server key's seed, making one on first start. It never leaves this file.

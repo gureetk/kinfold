@@ -455,14 +455,6 @@ func (s *Server) listCircles(q *request) error {
 
 // ---- login (PROTOCOL.md §13.2, API.md §5) ----
 
-func clientAddress(r *http.Request) string {
-	host := r.RemoteAddr
-	if i := bytes.LastIndexByte([]byte(host), ':'); i >= 0 {
-		host = host[:i]
-	}
-	return host
-}
-
 // challenge is POST /v1/auth/challenge. It answers the same way whether or not the server
 // knows the device.
 func (s *Server) challenge(q *request) error {
@@ -479,7 +471,7 @@ func (s *Server) challenge(q *request) error {
 	if ok, wait := s.limiter.allow("challenge/device/"+string(in.DeviceID), l.ChallengesPerDevice, minute, q.now); !ok {
 		return rateLimited(wait)
 	}
-	if ok, wait := s.limiter.allow("challenge/address/"+clientAddress(q.r), l.ChallengesPerAddress, minute, q.now); !ok {
+	if ok, wait := s.limiter.allow("challenge/address/"+s.clientAddress(q.r), l.ChallengesPerAddress, minute, q.now); !ok {
 		return rateLimited(wait)
 	}
 	ch := s.random(32)
