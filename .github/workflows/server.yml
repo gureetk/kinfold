@@ -27,6 +27,13 @@ jobs:
           go-version-file: server/go.mod
           cache: false
 
+      # Every module is checked against go.sum, whose hashes the Go checksum database vouches for.
+      - name: Verify modules
+        run: |
+          go mod download
+          go mod verify
+          go mod tidy -diff
+
       - name: Build
         run: CGO_ENABLED=0 go build -trimpath ./...
 
@@ -42,6 +49,9 @@ jobs:
 
       - name: Test with the race detector, the Python reference as oracle and as two clients
         run: KINFOLD_PYTHON="$RUNNER_TEMP/venv/bin/python" go test -race -count=1 ./...
+
+      - name: Test the API on the in-memory store as well as on SQLite
+        run: KINFOLD_STORE=memory go test -race -count=1 ./internal/api/
 
       - name: Fuzz every target for 10 seconds
         run: |

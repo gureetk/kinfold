@@ -450,7 +450,16 @@ It enforces:
 - who may call what: the **Who** columns here, which repeat for the API what spec §6.3 says about device kinds for the log;
 - the limits of §3.
 
-It deletes on a schedule: envelopes at the end of their time-to-live; its record of each `(sender, seq)` pair 32 days after the envelope was sent; sessions at 24 hours; link mailboxes within minutes; invites within 7 days; share links within 24 hours; closed circles after 30 days. A silence check runs once a minute.
+What has run out is refused at once and deleted by a sweep every hour:
+
+- envelopes at the end of their time-to-live, and its record of each `(sender, seq)` pair 32 days after the envelope was sent;
+- login challenges, sessions and registration tokens when they expire;
+- invites once nothing can use them: after `expires_at`, and a day after their result if one was written (§9);
+- a removed device's access to the log after 30 days (§6);
+- closed circles 30 days after their last member left, with everything that names them;
+- link mailboxes within minutes, and share links within 24 hours.
+
+A silence check runs once a minute.
 
 ---
 

@@ -15,9 +15,10 @@ import (
 )
 
 type circleLog struct {
-	c       store.Circle
-	entries [][]byte
-	index   map[string]int64 // entry hash -> seq
+	c        store.Circle
+	entries  [][]byte
+	index    map[string]int64 // entry hash -> seq
+	closedAt uint64           // when its last member left; 0 while it has members
 }
 
 // Store is an in-memory store.Store.
@@ -33,7 +34,7 @@ type Store struct {
 	removals   map[string]store.Removal // circle ‖ device
 	envelopes  []store.Envelope         // in order of arrival
 	nextSeq    uint64
-	seen       map[string]store.SeenRecord // circle ‖ sender ‖ seq
+	seen       map[string]seenRecord // circle ‖ sender ‖ seq
 	invites    map[string]store.Invite
 }
 
@@ -42,7 +43,7 @@ func New() *Store {
 	return &Store{tokens: map[string]store.Token{}, accounts: map[string]store.Account{},
 		devices: map[string]store.Device{}, challenges: map[string]store.Challenge{},
 		sessions: map[string]store.Session{}, circles: map[string]*circleLog{},
-		removals: map[string]store.Removal{}, seen: map[string]store.SeenRecord{}, invites: map[string]store.Invite{},
+		removals: map[string]store.Removal{}, seen: map[string]seenRecord{}, invites: map[string]store.Invite{},
 		nextSeq: 1}
 }
 
@@ -53,17 +54,21 @@ type tx struct {
 	undo     []func()
 }
 
-func (s *Store) Update(fn func(store.Tx) error) error {
+func (s *Store) Update(fn func(store.Tx) error) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t := &tx{s: s}
-	if err := fn(t); err != nil {
-		for i := len(t.undo) - 1; i >= 0; i-- {
-			t.undo[i]()
+	done := false
+	defer func() { // also when fn panics
+		if !done {
+			for i := len(t.undo) - 1; i >= 0; i-- {
+				t.undo[i]()
+			}
 		}
-		return err
-	}
-	return nil
+	}()
+	err = fn(t)
+	done = err == nil
+	return err
 }
 
 func (s *Store) View(fn func(store.Tx) error) error {
@@ -206,7 +211,7 @@ func (t *tx) Circle(id []byte) (store.Circle, error) {
 	return l.c, nil
 }
 
-func (t *tx) AppendEntry(circle, raw []byte, s *memberlog.State) error {
+func (t *tx) AppendEntry(circle, raw []byte, s *memberlog.State, at uint64) error {
 	t.writing()
 	l, err := get(t.s.circles, circle)
 	if err != nil {
@@ -215,15 +220,18 @@ func (t *tx) AppendEntry(circle, raw []byte, s *memberlog.State) error {
 	if s.Seq != int64(len(l.entries)) {
 		panic("memstore: entries appended out of order")
 	}
-	oldState, h := l.c.State, string(memberlog.Hash(raw))
+	oldState, oldClosed, h := l.c.State, l.closedAt, string(memberlog.Hash(raw))
 	t.undo = append(t.undo, func() {
-		l.c.State = oldState
+		l.c.State, l.closedAt = oldState, oldClosed
 		l.entries = l.entries[:len(l.entries)-1]
 		delete(l.index, h)
 	})
 	l.entries = append(l.entries, raw)
 	l.index[h] = s.Seq
 	l.c.State = s
+	if len(s.Members) == 0 && l.closedAt == 0 {
+		l.closedAt = at
+	}
 	return nil
 }
 
@@ -312,13 +320,19 @@ func seenKey(circle, sender []byte, seq uint64) string {
 		byte(seq >> 24), byte(seq >> 16), byte(seq >> 8), byte(seq)})
 }
 
+// seenRecord is a replay record with the circle it belongs to.
+type seenRecord struct {
+	circle string
+	store.SeenRecord
+}
+
 func (t *tx) Seen(circle, sender []byte, seq uint64) (store.SeenRecord, bool, error) {
 	r, ok := t.s.seen[seenKey(circle, sender, seq)]
-	return r, ok, nil
+	return r.SeenRecord, ok, nil
 }
 
 func (t *tx) PutSeen(circle, sender []byte, seq uint64, r store.SeenRecord) error {
-	set(t, t.s.seen, seenKey(circle, sender, seq), r)
+	set(t, t.s.seen, seenKey(circle, sender, seq), seenRecord{string(circle), r})
 	return nil
 }
 
@@ -334,5 +348,62 @@ func (t *tx) InvitesOf(circle []byte) ([]store.Invite, error) {
 			out = append(out, v)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i].ID, out[j].ID) < 0 })
 	return out, nil
+}
+
+// ---- sweeping ----
+
+// sweep deletes the entries of m for which gone is true, and counts them.
+func sweep[V any](t *tx, m map[string]V, gone func(V) bool) int {
+	n := 0
+	for k, v := range m {
+		if gone(v) {
+			del(t, m, k)
+			n++
+		}
+	}
+	return n
+}
+
+func (t *tx) Sweep(now uint64, r store.Retention) (store.Swept, error) {
+	t.writing()
+	var n store.Swept
+	n.Challenges = sweep(t, t.s.challenges, func(v store.Challenge) bool { return now >= v.ExpiresAt })
+	n.Sessions = sweep(t, t.s.sessions, func(v store.Session) bool { return now >= v.ExpiresAt })
+	n.Tokens = sweep(t, t.s.tokens, func(v store.Token) bool { return now >= v.ExpiresAt })
+	n.Seen = sweep(t, t.s.seen, func(v seenRecord) bool { return now >= v.KeepUntil })
+	n.Removals = sweep(t, t.s.removals, func(v store.Removal) bool { return now >= v.At+r.Removals })
+	n.Invites = sweep(t, t.s.invites, func(v store.Invite) bool {
+		return now >= v.ExpiresAt && (v.Result == nil || now >= v.ResultAt+r.Results)
+	})
+	// A closed circle goes with everything that names it.
+	gone := map[string]bool{}
+	n.Circles = sweep(t, t.s.circles, func(l *circleLog) bool {
+		if l.closedAt != 0 && now >= l.closedAt+r.ClosedCircles {
+			gone[string(l.c.ID)] = true
+			return true
+		}
+		return false
+	})
+	if len(gone) > 0 {
+		n.Removals += sweep(t, t.s.removals, func(v store.Removal) bool { return gone[string(v.Circle)] })
+		n.Invites += sweep(t, t.s.invites, func(v store.Invite) bool { return gone[string(v.Circle)] })
+		n.Seen += sweep(t, t.s.seen, func(v seenRecord) bool { return gone[v.circle] })
+	}
+	// Envelopes are a slice in order of arrival.
+	old := t.s.envelopes
+	var kept []store.Envelope
+	for _, e := range old {
+		if now >= e.ExpiresAt || gone[string(e.Circle)] {
+			n.Envelopes++
+		} else {
+			kept = append(kept, e)
+		}
+	}
+	if n.Envelopes > 0 {
+		t.undo = append(t.undo, func() { t.s.envelopes = old })
+		t.s.envelopes = kept
+	}
+	return n, nil
 }

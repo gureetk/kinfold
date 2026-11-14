@@ -245,7 +245,7 @@ func (s *Server) append(q *request, repairPath bool) error {
 		if err != nil {
 			return refusedEntry(err, c.State)
 		}
-		if err := tx.AppendEntry(id, raw, ns); err != nil {
+		if err := tx.AppendEntry(id, raw, ns, q.now); err != nil {
 			return err
 		}
 		if err := s.afterAppend(q, tx, id, c.State, ns, e); err != nil {
