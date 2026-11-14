@@ -131,7 +131,7 @@ func serve(args []string) error {
 	}()
 	slog.Info("serving", "url", *url, "listen", *listen, "admin", sock)
 	go janitor(handler)
-	go silenceCheck(handler)
+	go everyMinute(handler)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
@@ -165,12 +165,14 @@ func janitor(s *api.Server) {
 	}
 }
 
-// silenceCheck runs the silence check of API.md §8 every minute.
-func silenceCheck(s *api.Server) {
+// everyMinute runs the silence check of API.md §8, and forgets link mailboxes that have
+// ended (§10), every minute.
+func everyMinute(s *api.Server) {
 	for range time.Tick(time.Minute) {
 		if err := s.CheckSilences(); err != nil {
 			slog.Error("silence check failed", "err", err)
 		}
+		s.SweepLinks()
 	}
 }
 

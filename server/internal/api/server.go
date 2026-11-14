@@ -82,6 +82,7 @@ type Server struct {
 	limiter *limiter
 	waits   *hub
 	streams *streams
+	links   *mailboxes
 	start   uint64
 
 	infoMu sync.Mutex
@@ -96,7 +97,7 @@ func New(cfg Config) *Server {
 	}
 	cfg.Stream = cfg.Stream.withDefaults()
 	s := &Server{cfg: cfg, mux: http.NewServeMux(), limiter: newLimiter(cfg.Limits.withDefaults()), waits: newHub(),
-		streams: newStreams(), start: cfg.Clock.Now()}
+		streams: newStreams(), links: newMailboxes(), start: cfg.Clock.Now()}
 	s.routes()
 	return s
 }
@@ -149,6 +150,10 @@ func (s *Server) routes() {
 	h("PUT /v1/circles/{id}/watches/{device_id}", s.putWatch)
 	h("GET /v1/circles/{id}/watches", s.listWatches)
 	h("DELETE /v1/circles/{id}/watches/{device_id}", s.deleteWatch)
+
+	h("POST /v1/links", s.createLink)
+	h("PUT /v1/links/{link_id}/{slot}", s.putLinkSlot)
+	h("GET /v1/links/{link_id}/{slot}", s.getLinkSlot)
 
 	h("POST /v1/invites", s.createInvite)
 	h("POST /v1/invites/{invite_id}/requests", s.postJoinRequest)
@@ -429,6 +434,9 @@ type Limits struct {
 	EnvelopesPerMinute   int // per device
 	EnvelopesPerHour     int // per device
 	StreamsPerMinute     int // connections, per device
+	LinksPerDevice       int // link mailboxes an hour, per device (direction 1)
+	LinksPerAddress      int // link mailboxes an hour without a session, per address (direction 2)
+	LinksPerServer       int // link mailboxes an hour without a session, for the whole server
 	PendingInvites       int // per circle
 	WaitingRequests      int // per invite
 }
@@ -446,6 +454,9 @@ func (l Limits) withDefaults() Limits {
 	def(&l.EnvelopesPerMinute, 20)
 	def(&l.EnvelopesPerHour, 600)
 	def(&l.StreamsPerMinute, 10)
+	def(&l.LinksPerDevice, 20)
+	def(&l.LinksPerAddress, 6)
+	def(&l.LinksPerServer, 60)
 	def(&l.PendingInvites, 16)
 	def(&l.WaitingRequests, 3)
 	return l
