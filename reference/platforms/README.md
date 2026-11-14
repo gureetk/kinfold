@@ -25,4 +25,4 @@ A single Swift script for a Mac with Xcode or the Command Line Tools. From the r
 swift reference/platforms/cryptokit/ed25519.swift spec/vectors/kinfold-v0.json
 ```
 
-It prints CryptoKit's verdict on each signature, alone and behind the byte checks, and exits with status 0 when CryptoKit may sit behind the checks.
+It prints CryptoKit's verdict on each signature, alone and behind the byte checks, and exits with status 0 when CryptoKit may sit behind the checks. CI has no Mac, so a person runs it; the last run, on macOS 27.0.1, found CryptoKit fit to sit behind the checks.
