@@ -15,7 +15,7 @@ The file is about 1.3 MB. Most of that is a handful of vectors that test size li
 ## Conventions
 
 - Byte strings are lowercase hex. Codes, links, URLs, names, digit codes and JSON text are plain strings; decoded payloads are JSON objects.
-- Times are milliseconds since the Unix epoch, UTC. The scenario starts at `1793635200000` (2026-11-02T16:00:00Z).
+- Times are milliseconds since the Unix epoch, UTC. The scenario starts at `1793635200000` (2026-11-02T16:00:00Z). Two vectors sit at the top of the u64 range, where a time limit written as a sum wraps around: the log case `accepted_bundle_at_end_of_time` and the envelope `bad_time_end_of_time` (PROTOCOL.md Appendix C).
 - Every key, secret and nonce was derived as `SHA-256("kinfold-test-vector/" ‖ tag)`. They are public: never use them outside tests.
 - X25519 private keys (`sk`) are raw 32-byte scalars; Ed25519 private keys (`*_seed`) are 32-byte seeds. WebCrypto imports both through JWK (`d` = base64url of the bytes).
 - Reason codes are the strings in PROTOCOL.md §16.5.

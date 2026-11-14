@@ -72,8 +72,8 @@ func TestMainLogAndCases(t *testing.T) {
 			cs = run(t, cs, tv.Obj(e), tv.Str(cc["name"]))
 		}
 	}
-	if len(cases) != 153 {
-		t.Errorf("%d cases; the vectors README promises 153", len(cases))
+	if len(cases) != 154 {
+		t.Errorf("%d cases; PROTOCOL.md §17 promises 154", len(cases))
 	}
 	// Apply never changes the state it is given.
 	if got, want := tv.Normalize(states[13].PublicJSON()), tv.PublicOnly(tv.Obj(tv.Arr(lg["entries"])[13])["state_after"]); !reflect.DeepEqual(got, want) {

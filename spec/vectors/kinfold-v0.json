@@ -3951,6 +3951,116 @@
     ]
    },
    {
+    "name": "accepted_bundle_at_end_of_time",
+    "description": "times at the top of the u64 range, which a check written as a sum gets wrong",
+    "base_seq": 13,
+    "entries": [
+     {
+      "seq": 14,
+      "author": "alex/phone",
+      "description": "an entry and a bundle in the last minutes a u64 can hold: valid and current, though not_before + 35 days and created_at + 10 minutes both pass 2^64",
+      "raw": "000001061e373f3f3b0436798becf98a7f660240000000000000000e95f0ced0782b25abd846010c9e17e10720b9d66941fb00bad8ade97e4e6a7536fffffffffffe2b3fd2bc96cff437d981838da274598fb283000000020000009800000150b421df0d5c65c6a0b60a14141b40f6d2bc96cff437d981838da274598fb283cd4e89ba8447a110af3ad247f61540f555211b474a73de6bddd329bba12f0577fffffffffffd40dfffffffffffffffff00000000007df3c96c1234ab19ef23509c6d9c69e969ebb3ad5331526393cf406419e67d7eef0a1e7424075ece367aefa8e954c52aba3d0e4f8bddb472a7f8dbe827676005559b970368e2bbc1f4350fd8275774a73b8348b445042ea2c59c60395379c73665bcd88f401d4be77f9832426f5ed9104cc0cef604a86b23e02b1c6c31820209",
+      "hash": "106b357a6eba974a589eee5d91b5e65816c3f1fa157c6df8d60a4ce4e7a76713",
+      "result": "accepted",
+      "reason": null,
+      "public_result": "accepted",
+      "public_reason": null,
+      "state_after": {
+       "circle_id": "1e373f3f3b0436798becf98a7f660240",
+       "seq": 14,
+       "head": "106b357a6eba974a589eee5d91b5e65816c3f1fa157c6df8d60a4ce4e7a76713",
+       "epoch": 2,
+       "rekey_pending": false,
+       "options": 0,
+       "used_invites": [
+        "acbb1cf1e87ced6118943a92036eb7c7",
+        "d6ba7eeed7b0d4dcba4f50291d1714ee"
+       ],
+       "members": [
+        {
+         "account_id": "05c7437fbb2d478e7c1f7adf8ee21836",
+         "ik_pub": "2757616b7c7659001de55c3ca9c571e5bb427e9852da9f3007e03e24a2182b18",
+         "admin": true,
+         "devices": [
+          {
+           "device_id": "f6089fa716a7e1a20af09b1582e0e9d4",
+           "kind": 1,
+           "key_id": "b089e269dca1e433"
+          }
+         ],
+         "role": "adult",
+         "teen_until": 0,
+         "guardians": [],
+         "rules": null,
+         "pauses": []
+        },
+        {
+         "account_id": "50b421df0d5c65c6a0b60a14141b40f6",
+         "ik_pub": "aea5e22ae247d5a937ac6787e71ce30662692fa86693cb1b75521b5831e253b6",
+         "admin": false,
+         "devices": [
+          {
+           "device_id": "d2bc96cff437d981838da274598fb283",
+           "kind": 1,
+           "key_id": "58238a9c534375a4"
+          }
+         ],
+         "role": "adult",
+         "teen_until": 0,
+         "guardians": [],
+         "rules": null,
+         "pauses": []
+        },
+        {
+         "account_id": "ecc3bb2d00dc6942cf6c47885223f6a6",
+         "ik_pub": "80d85d1796be30468dbf0266005c0526c1a08422bb7c971462a808723dbdcef5",
+         "admin": false,
+         "devices": [
+          {
+           "device_id": "db50dde3f64eca07f4813587a8578abd",
+           "kind": 1,
+           "key_id": "36300b97eed4b768"
+          }
+         ],
+         "role": "teen",
+         "teen_until": 1939248000000,
+         "guardians": [
+          "05c7437fbb2d478e7c1f7adf8ee21836"
+         ],
+         "rules": {
+          "pause_mode": 2,
+          "approx_mode": 1,
+          "speed_alert_kmh": 110,
+          "phone_use_alerts": 1,
+          "history_days": 14,
+          "silence_alert_min": 60,
+          "tz": "America/Vancouver",
+          "schedule": [
+           {
+            "kind": 1,
+            "days": 31,
+            "start_min": 930,
+            "end_min": 1020
+           }
+          ]
+         },
+         "pauses": []
+        }
+       ],
+       "name": "Rivera family",
+       "flags": [
+        {
+         "seq": 12,
+         "reason": "not_guardian"
+        }
+       ],
+       "private_unknown_from": null,
+       "state_hash": "33565a1a9b291302"
+      }
+     }
+    ]
+   },
+   {
     "name": "fatal_bad_wraps",
     "description": "epoch wraps miss a device",
     "base_seq": 13,
@@ -15813,6 +15923,19 @@
     "description": "sent more than a day after the receiver's clock",
     "log_seq": 13,
     "raw": "000001011e373f3f3b0436798becf98a7f660240f6089fa716a7e1a20af09b1582e0e9d40000000000000001000001a1ac74d3e100093a8095f0ced0782b25abd846010c9e17e10720b9d66941fb00bad8ade97e4e6a7536000000d0d2bc96cff437d981838da274598fb28397cedd2c75211a82b9db58080222533ccfd44eda6a438a7e689c6899a0207f5cc04af0e7954dac63a4646a34002cee41d268eec94e4023829141be422c63d9d0197e45cb37fdbc073dfc730baeab81b8c848b788eef1e200db50dde3f64eca07f4813587a8578abd36300b97eed4b76872fa7ad5b531cbac909cb98a036b002bca5116ea510026c3c4713261df603651fd6ba0daa17a0a4a892ff2cd31e7014a68da3fae1347afdbbce9ac385f5956034758dfc0feabaa72d9003d2faf41c93400000110fea6a1de111b97f108b5d7031577d50739edabde15a4610e6d5d4ab8efe8554455dabb88c93a2f65b3b13d1fe01291d855061ae0ae2d4dcf7c64bcb3967051b41d1b3a44cb45294206cead1710a102f08044585a25f242b542bcf684233017d2bc8952d7818ea6ef1afa614a032dd148bbb9cb4036436b1f40f7a4c897b967b11fcb06768cf9fa2884256b38da0cdb05e23470ef1d20a332739a09dd49e34858200b1dcf361c91cb78649e0471b0f4f08e737aae02ec82515e160b7bd03b5dcf793773432a68c9e2f5308b8de41ed20e64b31b9f2843a883b262ba62bc76204da72d9677f0d83f5368daa51b38b02e1711dbcfd90d0e66516c89d82675bb444e3a714eef4966739a8487f826c0d01491b468a08ebe96e2a3307f9b63243947bef0e7c8165f4d8f3c2e19390c6fd7bf2c7b8d77180a086d09f05f7fc53253b52d849d4d249758a5df23afe1be055ec80a",
+    "receiver": "alex/phone",
+    "receiver_device_id": "d2bc96cff437d981838da274598fb283",
+    "receiver_keys": {
+     "97cedd2c75211a82": "04e9ce019bf28fbf25a76d9bd703275cea1d66759d59f923fc574acffce60621"
+    },
+    "error": "bad_time",
+    "server_error": "bad_time"
+   },
+   {
+    "name": "bad_time_end_of_time",
+    "description": "sent at the last millisecond a u64 can hold: far ahead of the receiver's clock, though sent_at + 31 days, wrapped around, would look long past",
+    "log_seq": 13,
+    "raw": "000001011e373f3f3b0436798becf98a7f660240f6089fa716a7e1a20af09b1582e0e9d40000000000000001ffffffffffffffff00093a8095f0ced0782b25abd846010c9e17e10720b9d66941fb00bad8ade97e4e6a7536000000d0d2bc96cff437d981838da274598fb28397cedd2c75211a8278f5e300eedce996a0dbee58061d0ab8ed7999ae960033ed4d7eaee96494601d3f02824ebf5b304f2131f039af29a89dda8113ff9425639404ecf6857f8491f27515a694bc2cd6f946bd0dbb4fa52a89db50dde3f64eca07f4813587a8578abd36300b97eed4b768c2084bf52850abb5f79a1cccb3815044f9fa07ecf8e3cbd2b9689c4d2a6b38274ad820ed83c430754d03182bc1e3ce5800cbafd1f9d96760c2638f4fa85bd5ca347bab34482d032e65315e831a3fb41100000110a4929f8ada7eb7ecb5805ff13d8212726d6d1973584ed349a91e956f1f35d16fa95971babd6587decba61e9236c7b816d620a29db241b0469da276b616bf55235a0c68a1784d92b9c7b31984654ccd6aae899b78f7be8686e58d6cb8b4655ff3364c2b2aa672e815027dd9709e69a5339bb7503d8a3f2740f0f4a3f5287edbf92bbbd6b7dd9b8d69e9242592b074d23e9d8b634849394c69886d63797915a556cc1a1fb9219567fbfd89ae96ddfea1d58c83c2bfb447cee2b249605bc4a9099babd8f13adf720a79cb5ec37ecb7cd0592855cc5a0bd22a6ff03bc3ce06fe4b864c74a78c40f4e6692da2d6fc36e5d49555ea4c21811010c823bb3976b8b5764f63fb4777485f8e002e27a72f7f970d7bf3df57fd69d3dd4e66948a46b9e7d2d5d9937496611f953426aa05bc3f7ab4eb8cb66ed308fd8c98f746b3eb0a6185aba9afc9af583365caf0831c1d33ab8f05",
     "receiver": "alex/phone",
     "receiver_device_id": "d2bc96cff437d981838da274598fb283",
     "receiver_keys": {

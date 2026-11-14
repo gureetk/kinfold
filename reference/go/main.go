@@ -347,12 +347,14 @@ func (b bundle) keyID() []byte { return H("key-id", b.dek)[:8] }
 
 func bundleOK(b bundle, dsk, acc []byte) bool {
 	return b.raw != nil && b.ver == 0 && b.suite == 1 && bytes.Equal(b.dev, H("device-id", dsk)[:16]) &&
-		bytes.Equal(b.acc, acc) && !xKeyInvalid(b.dek) && b.nb < b.na && b.na <= b.nb+35*86_400_000 &&
+		bytes.Equal(b.acc, acc) && !xKeyInvalid(b.dek) && b.nb < b.na && b.na-b.nb <= 35*86_400_000 &&
 		verify(dsk, "key-bundle", b.raw[:88], b.sig)
 }
 
 // bundleCurrent: what a bundle must be at the created_at of the entry that carries it (§4.4).
-func bundleCurrent(b bundle, t uint64) bool { return b.nb <= t+600_000 && t < b.na }
+// Its author chooses t, so the limits are differences, never sums that could wrap around
+// (Appendix C); the same goes for every time below.
+func bundleCurrent(b bundle, t uint64) bool { return (b.nb <= t || b.nb-t <= 600_000) && t < b.na }
 
 // ---- public circle state (§6.1) ----
 
@@ -913,10 +915,10 @@ func envelopeCheck(s *state, raw []byte, seen map[string][32]byte, now uint64) s
 	if !known {
 		return "unknown_log_head"
 	}
-	if sentAt+maxAgeMS < now { // step 8
+	if now > sentAt && now-sentAt > maxAgeMS { // step 8
 		return "expired"
 	}
-	if sentAt > now+86_400_000 {
+	if sentAt > now && sentAt-now > 86_400_000 {
 		return "bad_time"
 	}
 	key, digest := fmt.Sprintf("%x/%d", sender, seq), sha256.Sum256(raw)
@@ -977,7 +979,7 @@ func watchGrantOK(s *state, raw []byte, now uint64) bool {
 	d := s.device(watched)
 	return ver == 0 && bytes.Equal(cid, s.cid) && d != nil && (d.kind == kindPhone || d.kind == kindTablet) &&
 		s.members[string(watcher)] != nil && afterMin >= 15 && afterMin <= 1440 &&
-		now < notAfter && notAfter <= now+35*86_400_000 && verify(d.dsk, "watch-grant", raw[:59], sig)
+		now < notAfter && notAfter-now <= 35*86_400_000 && verify(d.dsk, "watch-grant", raw[:59], sig)
 }
 
 // makePush builds the Push structure of §14.2; seed is the server's signing key.
