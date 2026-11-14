@@ -433,15 +433,15 @@ func invites(t *testing.T, s store.Store) {
 
 func watches(t *testing.T, s store.Store) {
 	w := func(c, d, by byte) store.Watch {
-		return store.Watch{Circle: id(c), Device: id(d), Watcher: id(by), Grant: []byte{c, d, by}, AfterMin: 15, NotAfter: 1 << 40,
-			Since: 5}
+		return store.Watch{Circle: id(c), Device: id(d), Watcher: id(by), Grant: []byte{c, d, by}, AfterMin: 15, IssuedAt: 4,
+			NotAfter: 1 << 40, Since: 5}
 	}
 	update(t, s, func(tx store.Tx) error {
 		for _, v := range []store.Watch{w(1, 3, 9), w(1, 2, 9), w(1, 2, 8), w(2, 2, 9)} {
 			must(t, tx.PutWatch(v))
 		}
 		v := w(1, 3, 7)
-		v.WokeAt, v.Alerted, v.Revoked = 6, true, true
+		v.WokeAt, v.Alerted, v.Revoked, v.RevokedAt = 6, true, true, 7
 		return tx.PutWatch(v)
 	})
 	view(t, s, func(tx store.Tx) error {
@@ -458,7 +458,7 @@ func watches(t *testing.T, s store.Store) {
 		}
 		got, err := tx.Watch(id(1), id(3), id(7))
 		want := w(1, 3, 7)
-		want.WokeAt, want.Alerted, want.Revoked = 6, true, true
+		want.WokeAt, want.Alerted, want.Revoked, want.RevokedAt = 6, true, true, 7
 		if err != nil || !reflect.DeepEqual(got, want) {
 			t.Errorf("watch: %+v %v", got, err)
 		}

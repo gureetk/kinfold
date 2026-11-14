@@ -1261,7 +1261,8 @@ LOC_APPROX = {"t": "loc", "ts": T0 + 2 * DAY - 9000, "lat": alat, "lon": alon, "
 PAUSE_REQ = {"t": "pause_req", "id": b64u(rnd("pause/2", 8)), "kind": 1, "start": T0 + 2 * DAY + HOUR,
              "end": T0 + 2 * DAY + 3 * HOUR, "note": "Study group at the library"}
 LIVE_REQ = {"t": "sig", "k": "live_req", "until": T0 + 2 * DAY + 5 * MIN}
-GRANT = ps.make_watch_grant(mp.dsk, CID, mp.id, J.acc, 60, RECEIVER_NOW + 7 * DAY)
+GRANT_ISSUED = T0 + 2 * DAY      # when Maya's phone signed GRANT: as it sent it
+GRANT = ps.make_watch_grant(mp.dsk, CID, mp.id, J.acc, 60, GRANT_ISSUED, RECEIVER_NOW + 7 * DAY)
 PLACE_N = rnd("place/1/n", 8)
 PLACE = {"t": "place", "id": b64u(ev.place_id(M.acc, PLACE_N)), "creator": b64u(M.acc), "n": b64u(PLACE_N), "v": 1,
          "name": "Library", "lat": 436677000, "lon": -793948000, "r": 120}
@@ -1723,30 +1724,43 @@ auth_vec = dict(server_seed=SERVER_SEED.hex(), server_key=SERVER_KEY.hex(), serv
 
 # silence-watch grants (14.1), judged against the whole main log at the envelopes' clock
 grants = []
+NOW = RECEIVER_NOW
+
+
+def grant(after_min=60, issued_at=GRANT_ISSUED, not_after=NOW + 7 * DAY, dsk=mp.dsk, cid=None, watched=mp.id,
+          watcher=J.acc):
+    return ps.make_watch_grant(dsk, cid or CID, watched, watcher, after_min, issued_at, not_after)
+
+
 for name, desc, raw, ok in [
         ("maya_grants_jordan", "Maya's phone lets Jordan be told after 60 minutes of silence", GRANT, True),
-        ("shortest_interval", "15 minutes, the shortest interval", ps.make_watch_grant(
-            mp.dsk, CID, mp.id, J.acc, 15, RECEIVER_NOW + 35 * DAY), True),
-        ("signed_by_another_device", "names Maya's phone but was signed by Jordan's", ps.make_watch_grant(
-            jp.dsk, CID, mp.id, J.acc, 60, RECEIVER_NOW + 7 * DAY), False),
-        ("interval_too_short", "after_min of 14", ps.make_watch_grant(
-            mp.dsk, CID, mp.id, J.acc, 14, RECEIVER_NOW + 7 * DAY), False),
-        ("interval_too_long", "after_min of 1,441", ps.make_watch_grant(
-            mp.dsk, CID, mp.id, J.acc, 1441, RECEIVER_NOW + 7 * DAY), False),
-        ("expired", "not_after has passed", ps.make_watch_grant(mp.dsk, CID, mp.id, J.acc, 60, RECEIVER_NOW), False),
-        ("too_far_ahead", "not_after more than 35 days away", ps.make_watch_grant(
-            mp.dsk, CID, mp.id, J.acc, 60, RECEIVER_NOW + 35 * DAY + 1), False),
-        ("web_device", "a browser can't be watched: it doesn't share a location", ps.make_watch_grant(
-            jw.dsk, CID, jw.id, A.acc, 60, RECEIVER_NOW + 7 * DAY), False),
-        ("watcher_not_a_member", "the watcher isn't in the circle", ps.make_watch_grant(
-            mp.dsk, CID, mp.id, S.acc, 60, RECEIVER_NOW + 7 * DAY), False),
-        ("other_circle", "a grant for another circle", ps.make_watch_grant(
-            mp.dsk, rnd("other-circle", 16), mp.id, J.acc, 60, RECEIVER_NOW + 7 * DAY), False)]:
+        ("shortest_interval", "15 minutes, the shortest interval, for the longest life: 35 days from issued_at",
+         grant(15, NOW, NOW + 35 * DAY), True),
+        ("signed_by_another_device", "names Maya's phone but was signed by Jordan's", grant(dsk=jp.dsk), False),
+        ("interval_too_short", "after_min of 14", grant(14), False),
+        ("interval_too_long", "after_min of 1,441", grant(1441), False),
+        ("expired", "not_after has passed", grant(not_after=NOW), False),
+        ("lasts_too_long", "not_after more than 35 days after issued_at",
+         grant(issued_at=NOW, not_after=NOW + 35 * DAY + 1), False),
+        ("issued_long_ago", "issued 30 days ago and good for 35 days from then",
+         grant(issued_at=NOW - 30 * DAY, not_after=NOW + 5 * DAY), True),
+        ("issued_long_ago_lasts_too_long", "issued 30 days ago and good for 37 days from then: the 35 days count "
+         "from issued_at, not from now", grant(issued_at=NOW - 30 * DAY, not_after=NOW + 7 * DAY), False),
+        ("issued_10_minutes_ahead", "issued_at exactly 10 minutes ahead of the server's clock: the latest accepted",
+         grant(issued_at=NOW + 10 * MIN, not_after=NOW + 7 * DAY), True),
+        ("issued_in_the_future", "issued_at 10 minutes and 1 ms ahead of the server's clock",
+         grant(issued_at=NOW + 10 * MIN + 1, not_after=NOW + 7 * DAY), False),
+        ("ends_before_issued", "not_after is still ahead but comes before issued_at",
+         grant(issued_at=NOW + 5 * MIN, not_after=NOW + MIN), False),
+        ("web_device", "a browser can't be watched: it doesn't share a location",
+         grant(dsk=jw.dsk, watched=jw.id, watcher=A.acc), False),
+        ("watcher_not_a_member", "the watcher isn't in the circle", grant(watcher=S.acc), False),
+        ("other_circle", "a grant for another circle", grant(cid=rnd("other-circle", 16)), False)]:
     assert ps.watch_grant_ok(raw, SF, RECEIVER_NOW) == ok, name
     grants.append(dict(name=name, description=desc, grant=raw.hex(), valid=ok))
 grant_vec = dict(log_seq=FINAL, now=RECEIVER_NOW, grants=grants,
                  fields=dict(circle_id=CID.hex(), watched_device_id=mp.id.hex(), watcher_account_id=J.acc.hex(),
-                             after_min=60, not_after=RECEIVER_NOW + 7 * DAY))
+                             after_min=60, issued_at=GRANT_ISSUED, not_after=RECEIVER_NOW + 7 * DAY))
 
 # push messages (14.2) and the relay signature (14.4)
 PUSH_AT = RECEIVER_NOW

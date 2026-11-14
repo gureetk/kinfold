@@ -21,7 +21,7 @@ const WakeWait = 2 * minute
 
 var (
 	errBadGrant   = &apiError{status: http.StatusUnprocessableEntity, code: "bad_grant", msg: "the watch grant isn't valid (PROTOCOL.md §14.1)"}
-	errStaleGrant = &apiError{status: http.StatusConflict, code: "stale_grant", msg: "this grant is no newer than the one registered or revoked"}
+	errStaleGrant = &apiError{status: http.StatusConflict, code: "stale_grant", msg: "this grant was issued no later than the one registered, or before the watch was ended"}
 )
 
 // putWatch is PUT /v1/circles/{id}/watches/{device_id}: register a watch, or renew it with
@@ -54,22 +54,30 @@ func (s *Server) putWatch(q *request) error {
 		if !bytes.Equal(g.WatcherAccount, q.dev.Account) {
 			return errForbidden
 		}
-		w := store.Watch{Circle: id, Device: device, Watcher: q.dev.Account, Grant: raw, AfterMin: g.AfterMin, NotAfter: g.NotAfter}
+		w := store.Watch{Circle: id, Device: device, Watcher: q.dev.Account, Grant: raw, AfterMin: g.AfterMin,
+			IssuedAt: g.IssuedAt, NotAfter: g.NotAfter}
 		old, err := tx.Watch(id, device, q.dev.Account)
 		switch {
-		case err == nil && !old.Revoked && bytes.Equal(old.Grant, raw):
-			return nil // the same grant again
-		case err == nil && g.NotAfter <= old.NotAfter:
-			// Newer means a later not_after. A revoked watch keeps its place until then, so
-			// that the watcher can't bring it back with the same or an older grant.
-			return errStaleGrant
-		case err == nil && !old.Revoked:
-			w.Since, w.WokeAt, w.Alerted = old.Since, old.WokeAt, old.Alerted // a renewal: the silence goes on
 		case err != nil && !errors.Is(err, store.ErrNotFound):
 			return err
+		case err == nil && g.IssuedAt <= old.RevokedAt:
+			// Issued no later than the watched account last ended the watch: a grant the
+			// watcher kept can't bring it back, however late its not_after.
+			return errStaleGrant
+		case err == nil && !old.Revoked && bytes.Equal(old.Grant, raw):
+			return nil // the same grant again
+		case err == nil && !old.Revoked && g.IssuedAt <= old.IssuedAt:
+			return errStaleGrant // newer means a later issued_at
+		case err == nil && !old.Revoked:
+			// A renewal: the silence goes on.
+			w.Since, w.WokeAt, w.Alerted, w.RevokedAt = old.Since, old.WokeAt, old.Alerted, old.RevokedAt
 		default:
-			// A new watch. A device that has been quiet for a while has been silent since it
-			// was last heard.
+			// A new watch, or one the device has granted again since the watched account
+			// ended the last, which is remembered past it. A device that has been quiet for a
+			// while has been silent since it was last heard.
+			if err == nil {
+				w.RevokedAt = old.RevokedAt
+			}
 			at, heard, err := tx.LastHeard(id, device)
 			if err != nil {
 				return err
@@ -113,7 +121,7 @@ func (s *Server) listWatches(q *request) error {
 				continue
 			}
 			out = append(out, map[string]any{"watched_device_id": b64(w.Device), "watcher_account_id": b64(w.Watcher),
-				"after_min": w.AfterMin, "not_after": w.NotAfter})
+				"after_min": w.AfterMin, "issued_at": w.IssuedAt, "not_after": w.NotAfter})
 		}
 		return nil
 	})
@@ -166,9 +174,10 @@ func (s *Server) deleteWatch(q *request) error {
 		}
 		switch {
 		case bytes.Equal(w.Watcher, q.dev.Account):
-			err = tx.DeleteWatch(id, device, watcher)
+			err = dropWatch(tx, w, q.now)
 		case watchedBy(c.State, w, q.dev.Account):
-			w.Revoked = true
+			// Kept for 35 days, until every grant issued before now has run out (API.md §8).
+			w.Revoked, w.RevokedAt, w.NotAfter = true, q.now, q.now+watch.MaxLifeMS
 			err = tx.PutWatch(w)
 		default:
 			return errForbidden
@@ -183,6 +192,17 @@ func (s *Server) deleteWatch(q *request) error {
 	}
 	q.w.WriteHeader(http.StatusNoContent)
 	return nil
+}
+
+// dropWatch ends a watch. If the watched account ended it within the last 35 days, the
+// record stays, inactive, until those days are over: a grant issued before that ending can
+// still be valid, and mustn't bring the watch back (API.md §8).
+func dropWatch(tx store.Tx, w store.Watch, now uint64) error {
+	if w.RevokedAt != 0 && (now < w.RevokedAt || now-w.RevokedAt < watch.MaxLifeMS) {
+		w.Revoked, w.NotAfter = true, w.RevokedAt+watch.MaxLifeMS
+		return tx.PutWatch(w)
+	}
+	return tx.DeleteWatch(w.Circle, w.Device, w.Watcher)
 }
 
 // tellWatchEnded sends watch_ended to the watcher's phones and tablets once the transaction
@@ -209,7 +229,8 @@ func phonesOf(tx store.Tx, account []byte) ([]store.Device, error) {
 
 // endWatches ends the watches an append has made invalid (PROTOCOL.md §14.1): those on a
 // device that left the circle, which tells the watcher, and those of a watcher whose
-// account left, which tells nobody.
+// account left, which tells nobody. What the watched account ended stays until the sweep
+// takes it, so that a device or a watcher that comes back can't revive it with an old grant.
 func (s *Server) endWatches(q *request, tx store.Tx, circle []byte, ns *memberlog.State) error {
 	ws, err := tx.WatchesIn(circle)
 	if err != nil {
@@ -217,13 +238,13 @@ func (s *Server) endWatches(q *request, tx store.Tx, circle []byte, ns *memberlo
 	}
 	for _, w := range ws {
 		gone, member := ns.Device(w.Device) == nil, ns.Member(w.Watcher) != nil
-		if !gone && member {
+		if (!gone && member) || w.Revoked {
 			continue
 		}
-		if err := tx.DeleteWatch(w.Circle, w.Device, w.Watcher); err != nil {
+		if err := dropWatch(tx, w, q.now); err != nil {
 			return err
 		}
-		if gone && member && !w.Revoked {
+		if gone && member {
 			if err := s.tellWatchEnded(q, tx, w, "device_removed"); err != nil {
 				return err
 			}
@@ -248,7 +269,7 @@ func (s *Server) CheckSilences() error {
 			case w.Revoked:
 				continue
 			case now >= w.NotAfter:
-				if err := tx.DeleteWatch(w.Circle, w.Device, w.Watcher); err != nil {
+				if err := dropWatch(tx, w, now); err != nil {
 					return err
 				}
 				if err := s.tellWatchEnded(q, tx, w, "expired"); err != nil {

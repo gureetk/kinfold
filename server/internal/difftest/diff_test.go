@@ -656,11 +656,20 @@ func (w *world) grant(r *rand.Rand, g *gstate) []byte {
 		watcher = pick(r, ms).Account
 	}
 	after := pick(r, []uint16{15, 14, 1440, 1441, 60, uint16(r.Uint32())})
-	notAfter := w.now + pick(r, []uint64{1, 0, watch.MaxLifeMS, watch.MaxLifeMS + 1, uint64(r.Int64N(40 * identity.DayMS))})
-	if chance(r, 0.05) {
+	// issued_at around the server's clock and its 10 minutes of slack, or weeks before it;
+	// not_after around the 35 days after issued_at, before it, or around now.
+	issued := w.now + pick(r, []uint64{0, watch.SkewMS, watch.SkewMS + 1, uint64(r.Int64N(2 * watch.SkewMS))}) -
+		pick(r, []uint64{0, 0, uint64(r.Int64N(40 * identity.DayMS))})
+	notAfter := issued + pick(r, []uint64{1, 0, watch.MaxLifeMS, watch.MaxLifeMS + 1, uint64(r.Int64N(40 * identity.DayMS))})
+	switch {
+	case chance(r, 0.05):
 		notAfter = w.now - uint64(r.IntN(1000))
+	case chance(r, 0.05):
+		notAfter = w.now + uint64(r.IntN(1000))
+	case chance(r, 0.02):
+		issued, notAfter = r.Uint64(), r.Uint64()
 	}
-	tbs := wire.Concat([]byte{0}, cid, watched.id, watcher, wire.U16(after), wire.U64(notAfter))
+	tbs := wire.Concat([]byte{0}, cid, watched.id, watcher, wire.U16(after), wire.U64(issued), wire.U64(notAfter))
 	if chance(r, 0.01) {
 		tbs[0] = 1
 	}

@@ -139,13 +139,15 @@ type Watch struct {
 	Watcher  []byte // the watcher's account
 	Grant    []byte // the WatchGrant that allows it
 	AfterMin uint16
+	IssuedAt uint64 // the grant's issued_at
 	NotAfter uint64
 	Since    uint64 // when the current silence began
 	WokeAt   uint64 // when the device was woken in this silence; 0 before that
 	Alerted  bool   // the watcher has been told of this silence
-	// Revoked: the watched account deleted it. It stays until NotAfter, inactive, so that
-	// its grant can't be registered again.
-	Revoked bool
+	// Revoked: the watched account deleted it at RevokedAt. It stays, inactive, until
+	// NotAfter, 35 days on, so that no grant issued before then can bring it back.
+	Revoked   bool
+	RevokedAt uint64
 }
 
 // Share is a share link (API.md §11): the latest update of a live location, sealed under a

@@ -440,7 +440,7 @@ for t in W["grants"]:
 g, wf = ps.parse_watch_grant(hx(W["grants"][0]["grant"])), W["fields"]
 check("watch", "fields", g["circle_id"].hex() == wf["circle_id"] and g["watched_device_id"].hex() == wf["watched_device_id"]
       and g["watcher_account_id"].hex() == wf["watcher_account_id"] and g["after_min"] == wf["after_min"]
-      and g["not_after"] == wf["not_after"])
+      and g["issued_at"] == wf["issued_at"] and g["not_after"] == wf["not_after"])
 PU = v["push"]
 for t in PU["valid"]:
     got = ps.open_push(hx(t["sealed"]), hx(t["device_id"]), keys(t["keys"]), hx(PU["server_key"]), t["now"])

@@ -1040,12 +1040,12 @@ await attempt('watch_grants', async () => {
   }
   const g = K.parseWatchGrant(X(W.grants[0].grant));
   checkEq('fields of the first grant',
-    { circle_id: g.circle_id, watched_device_id: g.watched_device_id, watcher_account_id: g.watcher_account_id, after_min: g.after_min, not_after: g.not_after },
+    { circle_id: g.circle_id, watched_device_id: g.watched_device_id, watcher_account_id: g.watcher_account_id, after_min: g.after_min, issued_at: g.issued_at, not_after: g.not_after },
     W.fields);
   const watched = devicesById.get(W.fields.watched_device_id);
   checkEq('the first grant rebuilt with the watched device\'s key',
     toHex(await K.buildWatchGrant(watched.signer, { circle_id: g.circle_id, watched_device_id: g.watched_device_id,
-      watcher_account_id: g.watcher_account_id, after_min: g.after_min, not_after: g.not_after })), W.grants[0].grant);
+      watcher_account_id: g.watcher_account_id, after_min: g.after_min, issued_at: g.issued_at, not_after: g.not_after })), W.grants[0].grant);
   check('a grant that is cut short is not valid', !await K.watchGrantValid(X(W.grants[0].grant).slice(0, -1), st, W.now));
   check('the first grant stops being valid at not_after', await K.watchGrantValid(X(W.grants[0].grant), st, W.fields.not_after - 1)
     && !await K.watchGrantValid(X(W.grants[0].grant), st, W.fields.not_after));

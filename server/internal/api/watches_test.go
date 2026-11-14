@@ -22,8 +22,8 @@ import (
 const minute = 60_000
 
 // grant signs a WatchGrant (PROTOCOL.md §14.1) with the watched device's key.
-func grant(d *device, cid, watcher []byte, afterMin uint16, notAfter uint64) []byte {
-	tbs := wire.Concat([]byte{0}, cid, d.id, watcher, wire.U16(afterMin), wire.U64(notAfter))
+func grant(d *device, cid, watcher []byte, afterMin uint16, issuedAt, notAfter uint64) []byte {
+	tbs := wire.Concat([]byte{0}, cid, d.id, watcher, wire.U16(afterMin), wire.U64(issuedAt), wire.U64(notAfter))
 	return append(tbs, kcrypto.Sign(d.dsk, "watch-grant", tbs)...)
 }
 
@@ -125,7 +125,7 @@ func TestWatches(t *testing.T) {
 	l := newLive(t, generous, api.StreamTimes{})
 	jordan, alex, maya := byLabel(l.devs, "jordan/phone"), byLabel(l.devs, "alex/phone"), byLabel(l.devs, "maya/phone")
 	start := l.clk.Now()
-	g := grant(maya, l.cid, jordan.account, 15, start+10*1440*minute)
+	g := grant(maya, l.cid, jordan.account, 15, start, start+10*1440*minute)
 
 	// Who may register what.
 	if r := l.putWatch(alex, maya, g); r.code != http.StatusForbidden {
@@ -134,14 +134,17 @@ func TestWatches(t *testing.T) {
 	if r := l.putWatch(jordan, alex, g); r.code != http.StatusUnprocessableEntity {
 		t.Errorf("a grant for another device than the path's: %d", r.code)
 	}
-	for _, bad := range [][]byte{grant(maya, l.cid, jordan.account, 14, start+minute), grant(maya, l.cid, jordan.account, 15, start),
-		grant(maya, l.cid, jordan.account, 15, start+36*1440*minute), grant(alex, l.cid, jordan.account, 15, start+minute)[:122]} {
+	for _, bad := range [][]byte{grant(maya, l.cid, jordan.account, 14, start, start+minute),
+		grant(maya, l.cid, jordan.account, 15, start-minute, start), // run out
+		grant(maya, l.cid, jordan.account, 15, start, start+35*1440*minute+1),
+		grant(maya, l.cid, jordan.account, 15, start+10*minute+1, start+minute*20), // issued in the future
+		grant(alex, l.cid, jordan.account, 15, start, start+minute)[:130]} {
 		if r := l.putWatch(jordan, maya, bad); r.code != http.StatusUnprocessableEntity {
 			t.Errorf("a bad grant: %d %s", r.code, r.body)
 		}
 	}
 	forged := append([]byte(nil), g...)
-	copy(forged[59:], kcrypto.Sign(alex.dsk, "watch-grant", g[:59])) // signed by another device
+	copy(forged[67:], kcrypto.Sign(alex.dsk, "watch-grant", g[:67])) // signed by another device
 	if r := l.putWatch(jordan, maya, forged); r.code != http.StatusUnprocessableEntity {
 		t.Errorf("a grant signed by another device: %d", r.code)
 	}
@@ -157,7 +160,7 @@ func TestWatches(t *testing.T) {
 		if ws := l.watches(d); len(ws) != n {
 			t.Errorf("%s sees %d watches", d.label, len(ws))
 		} else if n == 1 && (ws[0]["watched_device_id"] != b64(maya.id) || ws[0]["after_min"] != float64(15) ||
-			ws[0]["watcher_account_id"] != b64(jordan.account)) {
+			ws[0]["watcher_account_id"] != b64(jordan.account) || ws[0]["issued_at"] != float64(start)) {
 			t.Errorf("%s: %v", d.label, ws[0])
 		}
 	}
@@ -192,13 +195,17 @@ func TestWatches(t *testing.T) {
 	check()
 	silence(t, cj, l.srv.ServerKey(), jordan.id, l.cid, maya.id, heard, l.clk.Now())
 
-	// A newer grant renews it; an older one is refused.
-	newer := grant(maya, l.cid, jordan.account, 30, start+20*1440*minute)
+	// A grant issued later renews it; one issued earlier, or at the same moment, is refused,
+	// whatever its not_after.
+	newer := grant(maya, l.cid, jordan.account, 30, l.clk.Now(), start+20*1440*minute)
 	if r := l.putWatch(jordan, maya, newer); r.code != http.StatusNoContent {
 		t.Fatalf("a newer grant: %d", r.code)
 	}
-	if r := l.putWatch(jordan, maya, g); r.code != http.StatusConflict {
-		t.Errorf("an older grant: %d %s", r.code, r.body)
+	for _, old := range [][]byte{g, grant(maya, l.cid, jordan.account, 45, l.clk.Now(), start+21*1440*minute),
+		grant(maya, l.cid, jordan.account, 30, start+minute, start+34*1440*minute)} {
+		if r := l.putWatch(jordan, maya, old); r.code != http.StatusConflict {
+			t.Errorf("an older grant: %d %s", r.code, r.body)
+		}
 	}
 	if ws := l.watches(maya); len(ws) != 1 || ws[0]["after_min"] != float64(30) {
 		t.Errorf("after renewal: %v", ws)
@@ -221,8 +228,8 @@ func TestWatches(t *testing.T) {
 			t.Errorf("a revoked grant registered again: %d", r.code)
 		}
 	}
-	// A grant made after the revocation, newer than the revoked one, is taken.
-	fresh := grant(maya, l.cid, jordan.account, 30, start+30*1440*minute)
+	// A grant made after the revocation is taken.
+	fresh := grant(maya, l.cid, jordan.account, 30, l.clk.Now()+1, start+30*1440*minute)
 	if r := l.putWatch(jordan, maya, fresh); r.code != http.StatusNoContent {
 		t.Fatalf("a fresh grant: %d %s", r.code, r.body)
 	}
@@ -252,7 +259,7 @@ func TestWatchDirectEnvelopes(t *testing.T) {
 	l := newLive(t, generous, api.StreamTimes{})
 	jordan, alex := byLabel(l.devs, "jordan/phone"), byLabel(l.devs, "alex/phone")
 	start := l.clk.Now()
-	if r := l.putWatch(jordan, alex, grant(alex, l.cid, jordan.account, 15, start+1440*minute)); r.code != http.StatusNoContent {
+	if r := l.putWatch(jordan, alex, grant(alex, l.cid, jordan.account, 15, start, start+1440*minute)); r.code != http.StatusNoContent {
 		t.Fatalf("register: %d", r.code)
 	}
 	cj, _, _ := l.open(jordan, "")
@@ -278,7 +285,8 @@ func TestWatchDirectEnvelopes(t *testing.T) {
 func TestWatchDeviceRemoved(t *testing.T) {
 	l := newLive(t, generous, api.StreamTimes{})
 	jordan, alex := byLabel(l.devs, "jordan/phone"), byLabel(l.devs, "alex/phone")
-	if r := l.putWatch(alex, jordan, grant(jordan, l.cid, alex.account, 15, l.clk.Now()+1440*minute)); r.code != http.StatusNoContent {
+	now := l.clk.Now()
+	if r := l.putWatch(alex, jordan, grant(jordan, l.cid, alex.account, 15, now, now+1440*minute)); r.code != http.StatusNoContent {
 		t.Fatalf("register: %d", r.code)
 	}
 	ca, _, _ := l.open(alex, "")
@@ -292,6 +300,75 @@ func TestWatchDeviceRemoved(t *testing.T) {
 	if ws := l.watches(alex); len(ws) != 0 {
 		t.Error("the watch on the removed phone is still listed")
 	}
+}
+
+// When the watched account ends a watch, no grant issued before then brings it back, not
+// even one the watcher never registered and that runs out later than anything it did. The
+// server remembers the ending for 35 days, as long as such a grant can be valid, through a
+// new grant, the watcher's own delete and the new watch running out.
+func TestWatchRevocation(t *testing.T) {
+	l := newLive(t, generous, api.StreamTimes{})
+	jordan, maya := byLabel(l.devs, "jordan/phone"), byLabel(l.devs, "maya/phone")
+	start := l.clk.Now()
+	registered := grant(maya, l.cid, jordan.account, 60, start, start+7*1440*minute)
+	held := grant(maya, l.cid, jordan.account, 60, start+minute, start+minute+35*1440*minute) // kept back
+	put := func(g []byte, want int, what string) {
+		t.Helper()
+		if r := l.putWatch(jordan, maya, g); r.code != want {
+			t.Errorf("%s, %d minutes after the ending: %d %s", what, (l.clk.Now()-start)/minute-2, r.code, r.body)
+		}
+	}
+	put(registered, http.StatusNoContent, "register")
+	l.clk.Set(start + 2*minute)
+	ended := l.clk.Now()
+	path := "/v1/circles/" + b64(l.cid) + "/watches/" + b64(maya.id)
+	expect(t, l.do(call{method: "DELETE", path: path + "?watcher=" + b64(jordan.account), token: l.login(maya)}),
+		http.StatusNoContent, "")
+	atEnd := grant(maya, l.cid, jordan.account, 60, ended, ended+35*1440*minute)
+	put(registered, http.StatusConflict, "the registered grant")
+	put(held, http.StatusConflict, "a grant held back")
+	put(atEnd, http.StatusConflict, "a grant issued as the watch ended")
+
+	// The ending outlasts the grant that was registered.
+	l.clk.Set(ended + 8*1440*minute)
+	if _, err := l.srv.Sweep(); err != nil {
+		t.Fatal(err)
+	}
+	put(held, http.StatusConflict, "a grant held back, after the registered one ran out")
+
+	// Maya grants it again, and renews it. The held grant still can't replace the new
+	// watch, nor come back once Jordan ends it himself, nor once it runs out.
+	fresh := grant(maya, l.cid, jordan.account, 60, l.clk.Now(), l.clk.Now()+7*1440*minute)
+	put(fresh, http.StatusNoContent, "a grant issued after the ending")
+	put(held, http.StatusConflict, "a grant held back, over a new watch")
+	l.clk.Set(l.clk.Now() + minute)
+	renewed := grant(maya, l.cid, jordan.account, 60, l.clk.Now(), l.clk.Now()+7*1440*minute)
+	put(renewed, http.StatusNoContent, "a renewal")
+	expect(t, l.do(call{method: "DELETE", path: path, token: l.login(jordan)}), http.StatusNoContent, "")
+	put(held, http.StatusConflict, "a grant held back, after the watcher's own delete")
+	put(renewed, http.StatusNoContent, "the renewal again")
+	l.clk.Set(ended + 16*1440*minute)
+	if err := l.srv.CheckSilences(); err != nil {
+		t.Fatal(err)
+	}
+	if ws := l.watches(jordan); len(ws) != 0 {
+		t.Errorf("the new watch is still listed after it ran out: %v", ws)
+	}
+	put(held, http.StatusConflict, "a grant held back, after the new watch ran out")
+
+	// The ending is forgotten only once every grant issued before it has run out.
+	l.clk.Set(ended + 35*1440*minute - 2*minute)
+	if _, err := l.srv.Sweep(); err != nil {
+		t.Fatal(err)
+	}
+	put(held, http.StatusConflict, "a grant held back, in its last minute")
+	l.clk.Set(ended + 35*1440*minute)
+	if _, err := l.srv.Sweep(); err != nil {
+		t.Fatal(err)
+	}
+	put(held, http.StatusUnprocessableEntity, "a grant held back, run out")
+	put(atEnd, http.StatusUnprocessableEntity, "a grant issued as the watch ended, run out")
+	put(grant(maya, l.cid, jordan.account, 60, l.clk.Now(), l.clk.Now()+1440*minute), http.StatusNoContent, "a new grant")
 }
 
 // envelopesFrom returns valid envelopes of the vectors at entry 20 sent by the device.

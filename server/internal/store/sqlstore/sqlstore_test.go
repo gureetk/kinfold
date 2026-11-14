@@ -243,6 +243,36 @@ func TestUpgrade(t *testing.T) {
 	}))
 }
 
+// Version 8 drops the watches stored before it: their grants have no issued_at, so they
+// can't be read again. Everything else stays.
+func TestUpgradeDropsOldWatches(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kinfold.db")
+	db, err := sql.Open("sqlite3", "file:"+path)
+	mustDo(t, err)
+	for v := 1; v <= 7; v++ {
+		script, err := os.ReadFile(fmt.Sprintf("schema/%d.sql", v))
+		mustDo(t, err)
+		_, err = db.Exec(string(script))
+		mustDo(t, err)
+	}
+	for _, q := range []string{`PRAGMA user_version = 7`, `INSERT INTO tokens VALUES (x'01', 1, 9, 0, NULL)`,
+		`INSERT INTO watches VALUES (x'0a', x'0b', x'0c', x'0d', 15, 99, 1, 0, 0, 1)`} {
+		_, err = db.Exec(q)
+		mustDo(t, err)
+	}
+	db.Close()
+	s := open(t, path)
+	mustDo(t, s.View(func(tx store.Tx) error {
+		if _, err := tx.Token([]byte{1}); err != nil {
+			t.Error("the token is gone")
+		}
+		if ws, err := tx.Watches(); err != nil || len(ws) != 0 {
+			t.Errorf("%d watches kept: %v", len(ws), err)
+		}
+		return nil
+	}))
+}
+
 // A database from a newer server is refused, not changed.
 func TestNewerSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "kinfold.db")

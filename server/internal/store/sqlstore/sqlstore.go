@@ -34,7 +34,7 @@ import (
 var schema embed.FS
 
 // schemaVersion is the version this server's code reads and writes.
-const schemaVersion = 7
+const schemaVersion = 8
 
 // readers is how many connections may read at once.
 const readers = 4
@@ -778,19 +778,21 @@ func (t *tx) InvitesOf(circle []byte) ([]store.Invite, error) {
 
 // ---- watches ----
 
-const watchCols = `circle, device, watcher, grant_raw, after_min, not_after, since, woke_at, alerted, revoked`
+const watchCols = `circle, device, watcher, grant_raw, after_min, issued_at, not_after, since, woke_at, alerted, revoked, revoked_at`
 
 func scanWatch(row interface{ Scan(...any) error }) (store.Watch, error) {
 	var v store.Watch
-	var notAfter, since, woke int64
-	err := row.Scan(&v.Circle, &v.Device, &v.Watcher, &v.Grant, &v.AfterMin, &notAfter, &since, &woke, &v.Alerted, &v.Revoked)
-	v.NotAfter, v.Since, v.WokeAt = uint64(notAfter), uint64(since), uint64(woke)
+	var issued, notAfter, since, woke, revokedAt int64
+	err := row.Scan(&v.Circle, &v.Device, &v.Watcher, &v.Grant, &v.AfterMin, &issued, &notAfter, &since, &woke, &v.Alerted,
+		&v.Revoked, &revokedAt)
+	v.IssuedAt, v.NotAfter, v.Since, v.WokeAt, v.RevokedAt = uint64(issued), uint64(notAfter), uint64(since), uint64(woke), uint64(revokedAt)
 	return v, notFound(err)
 }
 
 func (t *tx) PutWatch(v store.Watch) error {
-	_, err := t.q.Exec(`INSERT OR REPLACE INTO watches (`+watchCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		v.Circle, v.Device, v.Watcher, v.Grant, v.AfterMin, i64(v.NotAfter), i64(v.Since), i64(v.WokeAt), v.Alerted, v.Revoked)
+	_, err := t.q.Exec(`INSERT OR REPLACE INTO watches (`+watchCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		v.Circle, v.Device, v.Watcher, v.Grant, v.AfterMin, i64(v.IssuedAt), i64(v.NotAfter), i64(v.Since), i64(v.WokeAt),
+		v.Alerted, v.Revoked, i64(v.RevokedAt))
 	return err
 }
 
