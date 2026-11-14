@@ -64,6 +64,7 @@ import (
 	"github.com/gureetk/kinfold/server/internal/admin"
 	"github.com/gureetk/kinfold/server/internal/api"
 	"github.com/gureetk/kinfold/server/internal/clock"
+	"github.com/gureetk/kinfold/server/internal/qr"
 	"github.com/gureetk/kinfold/server/internal/store"
 	"github.com/gureetk/kinfold/server/internal/store/sqlstore"
 	"github.com/gureetk/kinfold/server/internal/tiles"
@@ -500,7 +501,12 @@ func adminCommand(cmd string, args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Setup code for the first phone (scan it in the app, or type it):\n\n  %v\n\n", out["code"])
+		code, _ := out["code"].(string)
+		if qrCode, err := qr.Encode([]byte(code), qr.M); err == nil && isTerminal(os.Stdout) {
+			fmt.Printf("Setup code for the first phone. Scan it in the app:\n\n%s\nor enter it:\n\n  %s\n\n", qrCode.Terminal(), code)
+		} else {
+			fmt.Printf("Setup code for the first phone (scan it in the app, or enter it):\n\n  %s\n\n", code)
+		}
 		fmt.Printf("Server:       %v\nFingerprint:  %v\nExpires at:   %v\n", out["server_url"], out["fingerprint"], when(out["expires_at"]))
 		fmt.Println("\nA phone set up from this code knows the server's key. One set up by typing the address shows the\n" +
 			"fingerprint instead: compare it with the one above before you trust it.")
@@ -694,6 +700,12 @@ func adminCommand(cmd string, args []string) error {
 var kindNames = map[int]string{1: "phone", 2: "tablet", 3: "web", 4: "home assistant", 5: "recovery kit"}
 
 // printMap prints a region or the coarse archive as the admin socket describes it.
+// isTerminal says whether f is a terminal, where a QR code can be drawn.
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
 func printMap(v any) {
 	m, _ := v.(map[string]any)
 	size, _ := m["size"].(float64)
