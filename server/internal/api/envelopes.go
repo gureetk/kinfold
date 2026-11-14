@@ -98,8 +98,20 @@ func (s *Server) postEnvelope(q *request) error {
 	if err != nil {
 		return err
 	}
+	receivedAt, err := s.storeEnvelope(q, id, wake, raw)
+	if err != nil {
+		return err
+	}
+	writeJSON(q.w, http.StatusCreated, map[string]any{"received_at": receivedAt})
+	return nil
+}
+
+// storeEnvelope checks an envelope from the session's device and stores it for circle id,
+// with the wake-up asked for: the upload call, and the stream's post message (API.md §7).
+// It answers when the envelope was received, the first time it was posted.
+func (s *Server) storeEnvelope(q *request, id []byte, wake string, raw []byte) (uint64, error) {
 	var receivedAt uint64
-	err = s.update(q, func(tx store.Tx) error {
+	err := s.update(q, func(tx store.Tx) error {
 		if err := s.session(q, tx, receiving); err != nil {
 			return err
 		}
@@ -154,16 +166,10 @@ func (s *Server) postEnvelope(q *request) error {
 				return err
 			}
 		}
-		// Pushes for Kinfold-Wake come with push registration (API.md §12): until then the
-		// envelope waits for the recipient's next fetch.
 		return tx.PutSeen(id, env.Sender, env.Seq, store.SeenRecord{Digest: sha256.Sum256(raw), ReceivedAt: q.now,
 			KeepUntil: env.SentAt + SeenKeep})
 	})
-	if err != nil {
-		return err
-	}
-	writeJSON(q.w, http.StatusCreated, map[string]any{"received_at": receivedAt})
-	return nil
+	return receivedAt, err
 }
 
 func firstErr(errs ...error) error {

@@ -29,7 +29,7 @@ func (s *Server) discovery(q *request) error {
 	if err := s.cfg.Store.View(func(tx store.Tx) (err error) { st, err = tx.Settings(); return }); err != nil {
 		return err
 	}
-	features := []string{}
+	features := []string{"stream_post"}
 	out := map[string]any{
 		"server_info": b64(s.serverInfo(q.now)),
 		"api":         map[string]int{"min": APIMin, "max": APIMax},

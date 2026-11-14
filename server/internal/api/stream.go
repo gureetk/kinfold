@@ -16,6 +16,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/gureetk/kinfold/server/internal/envelope"
 	"github.com/gureetk/kinfold/server/internal/memberlog"
 	"github.com/gureetk/kinfold/server/internal/store"
 	"github.com/gureetk/kinfold/server/internal/wire"
@@ -29,7 +30,12 @@ const (
 	msgPush   = 0x04
 	msgEvent  = 0x05
 	msgTime   = 0x06
+	msgPost   = 0x10 // device → server: u32 id ‖ u8 wake ‖ envelope (stream_post)
+	msgResult = 0x11 // server → device: u32 id ‖ u16 status ‖ JSON
 )
+
+// wakes are the post message's wake byte: none, notify, locate.
+var wakes = []string{"", "notify", "locate"}
 
 // Close codes of the stream (API.md §7).
 const (
@@ -317,6 +323,7 @@ func (s *Server) openStream(q *request) error {
 		return nil // Accept has answered
 	}
 	st.conn = conn
+	conn.SetReadLimit(1 + 4 + 1 + envelope.MaxLen) // a post message
 	l := s.limiter.limits
 	if ok, _ := s.limiter.allow("stream/"+string(q.dev.ID), l.StreamsPerMinute, minute, q.now); !ok {
 		conn.Close(CloseRateLimited, closeReasons[CloseRateLimited])
@@ -328,7 +335,7 @@ func (s *Server) openStream(q *request) error {
 	}
 	defer s.streams.remove(st)
 	s.tellDropped(st.dev.ID) // a push registration that died while the device was away
-	s.runStream(st, since)
+	s.runStream(st, since, q.r)
 	return nil
 }
 
@@ -360,15 +367,24 @@ func cursorParam(q *request) (uint64, error) {
 func cursorText(seq uint64) string { return wire.EncodeB64u(wire.U64(seq)) }
 
 // runStream sends the time, what waits after the cursor and a cursor, then whatever comes,
-// until the stream ends.
-func (s *Server) runStream(st *stream, cursor uint64) {
+// until the stream ends. Meanwhile it reads the device's posts; upgrade is the request that
+// opened the stream, whose session each post is checked against.
+func (s *Server) runStream(st *stream, cursor uint64, upgrade *http.Request) {
 	t := s.cfg.Stream
-	ctx := st.conn.CloseRead(context.Background()) // answers pings; a message from the device closes it
+	ctx, broken := context.WithCancel(context.Background())
+	defer broken()
 	write := func(msg []byte) error {
 		wctx, cancel := context.WithTimeout(ctx, t.Write)
 		defer cancel()
 		return st.conn.Write(wctx, websocket.MessageBinary, msg)
 	}
+	reading := make(chan struct{})
+	go func() {
+		defer close(reading)
+		defer broken() // the device closed the stream, or it broke
+		s.readPosts(ctx, st, upgrade, write)
+	}()
+	defer func() { <-reading }() // a post under way finishes before the stream does
 	sendTime := func() error { return write(wire.Concat([]byte{msgTime}, wire.U64(s.cfg.Clock.Now()))) }
 	// records sends every record after the cursor, then a cursor if it sent any, or always.
 	records := func(always bool) error {
@@ -438,6 +454,57 @@ func (s *Server) runStream(st *stream, cursor uint64) {
 			return
 		}
 	}
+}
+
+// readPosts reads what the device sends until the stream ends: post messages, each stored
+// as the upload call would store it and answered with a result carrying the status and the
+// JSON that call would have answered (API.md §7). Pings are answered as they come. Anything
+// else closes the stream with 1008.
+func (s *Server) readPosts(ctx context.Context, st *stream, upgrade *http.Request, write func([]byte) error) {
+	for {
+		typ, msg, err := st.conn.Read(ctx)
+		if err != nil {
+			return
+		}
+		st.heard.Store(time.Now().UnixMilli())
+		if typ != websocket.MessageBinary || len(msg) < 6 || msg[0] != msgPost {
+			st.conn.Close(websocket.StatusPolicyViolation, "a device sends post messages only")
+			return
+		}
+		status, body := s.streamPost(upgrade, msg[5], msg[6:])
+		if write(wire.Concat([]byte{msgResult}, msg[1:5], wire.U16(uint16(status)), body)) != nil {
+			return
+		}
+	}
+}
+
+// streamPost stores an envelope posted on the stream, for the circle the envelope names, and
+// answers as POST /v1/circles/{id}/envelopes would. A 429 carries retry_after in seconds,
+// since a result has no headers.
+func (s *Server) streamPost(upgrade *http.Request, wake byte, raw []byte) (int, []byte) {
+	q := &request{r: upgrade, now: s.cfg.Clock.Now()}
+	var receivedAt uint64
+	var err error
+	switch {
+	case !s.cfg.Clock.Synced():
+		err = &apiError{status: http.StatusServiceUnavailable, code: "unavailable", msg: "the server's clock isn't synchronized"}
+	case int(wake) >= len(wakes):
+		err = badRequest("wake is 0, 1 or 2")
+	case len(raw) < 36:
+		err = refused("malformed", nil)
+	default:
+		receivedAt, err = s.storeEnvelope(q, raw[4:20], wakes[wake], raw) // the circle ID follows version, suite and kind
+	}
+	if err != nil {
+		e, body := errorBody(err)
+		if e.retryAfter > 0 {
+			body["retry_after"] = e.retryAfter
+		}
+		b, _ := json.Marshal(body)
+		return e.status, b
+	}
+	b, _ := json.Marshal(map[string]any{"received_at": receivedAt})
+	return http.StatusCreated, b
 }
 
 // waitingRecords reads a page of the device's records after the cursor.

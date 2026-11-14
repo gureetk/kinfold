@@ -1,6 +1,6 @@
 # Kinfold HTTP API, version 0
 
-**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §13 and the part of §16 that a first device needs, with these gaps: it takes no `apns` registrations; `stream_post` isn't offered; the operator can't yet allow closed ranges for web devices (§13); the share viewer shows a position as text, not yet on the coarse map.
+**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §13 and the part of §16 that a first device needs, with these gaps: it takes no `apns` registrations; the operator can't yet allow closed ranges for web devices (§13); the share viewer shows a position as text, not yet on the coarse map.
 **License:** [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 Section numbers written "spec §…" point into PROTOCOL.md. Where the two documents disagree about bytes, the spec wins.
@@ -142,7 +142,7 @@ Default rate limits. The operator can change them; clients MUST handle 429 at an
 ```
 
 - `server_info` is the only signed part. A client checks it against the server key it trusts before believing anything else (spec §13.1).
-- `features` lists what the operator has switched on. `tiles` means the server offers at least one map region and `search` that the search add-on is installed (§13); `web_devices` means direction-2 linking is available (§10); `member_tokens` means admins can mint registration tokens with invites (§9); `apns` may appear on a server that holds its own Apple key (§12).
+- `features` lists what the operator has switched on. `tiles` means the server offers at least one map region and `search` that the search add-on is installed (§13); `web_devices` means direction-2 linking is available (§10); `member_tokens` means admins can mint registration tokens with invites (§9); `stream_post` means devices may upload envelopes over the stream (§7); `apns` may appear on a server that holds its own Apple key (§12).
 - `relay` is the iOS relay this server sends through. An app whose built-in relay differs warns the person that pushes won't arrive.
 - `vapid_key` is present with `webpush`. The app hands it to its UnifiedPush distributor. It lasts as long as the server's data; an app that sees a different one subscribes again with it and sends the new registration (§12).
 - `move` is present while a move is announced (spec §13.3), at the old address and the new one, for at least 90 days.
@@ -245,6 +245,12 @@ A recipient with an open stream gets the record at once whatever the header says
 | 0x11 `result` | server → device | `u32 id ‖ u16 status ‖ JSON`: the answer the upload call would have given |
 
 On connecting, the server sends a `time` message, what the inbox holds after `since`, and a `cursor`. Then it sends live records as they are stored, each batch followed by a `cursor`, and log frames and events as they happen; a connection that falls behind gets only the latest log frame of each circle. A `cursor` message carries the cursor's text, the same as `Kinfold-Cursor`. A device keeps the last cursor it received and reconnects with it. Devices ping at their own pace with WebSocket pings; the server closes a connection on which nothing has come from the device, not even a ping, for 35 minutes. A device sends nothing else: without `stream_post`, a message from it closes the stream with 1008. One device has one stream: a second connection closes the first.
+
+**Posting on the stream.** With `stream_post`, a device may send `post` messages instead of calling `POST /v1/circles/{id}/envelopes`:
+- Each post is checked and stored as that call would do it. The circle is the one the envelope names, and the session is the one that opened the stream.
+- Each post is answered with a `result` carrying its `id`, and the status and JSON the call would have answered. A 429 result carries `retry_after` in seconds, since a result has no headers.
+- Posts are answered in the order they come.
+- Any other message from the device closes the stream with 1008. A message longer than a post with the largest envelope (§3) closes it with 1009.
 
 | Close code | Meaning | The device |
 | --- | --- | --- |
