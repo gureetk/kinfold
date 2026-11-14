@@ -2,7 +2,7 @@
 
 A free, self-hosted family location app: native Android and iOS apps and a small Go server, with end-to-end encryption, so the server that relays your family's locations can't read them. Built to feel familiar to people coming from Life360.
 
-> **Status: Phase 1 has begun.** The protocol spec (draft 0.3), the HTTP API draft, test vectors and three implementations that agree on them are here, along with a server that answers the API's accounts, member logs, envelopes, live stream, silence watches, invites, device linking and share links and keeps its data in SQLite. The rest of the server and the apps don't exist yet.
+> **Status: Phase 1 has begun.** The protocol spec (draft 0.3), the HTTP API draft, test vectors and three implementations that agree on them are here, along with a server that answers the API's accounts, member logs, envelopes, live stream, silence watches, invites, device linking, share links and push through the iOS relay and keeps its data in SQLite. The rest of the server and the apps don't exist yet.
 >
 > Not affiliated with other apps that use the name Kinfold.
 
@@ -17,7 +17,7 @@ A free, self-hosted family location app: native Android and iOS apps and a small
 | [`reference/js/`](reference/js/) | Independent WebCrypto implementation (written from the spec alone) | Apache-2.0 |
 | [`reference/go/`](reference/go/) | Go standard-library checker for everything a server enforces (public mode); the seed of the server's protocol package | Apache-2.0 |
 | [`reference/platforms/`](reference/platforms/) | The Ed25519 edge cases run through platform libraries: the JDK, Tink, Conscrypt and Bouncy Castle (in CI), and CryptoKit (a script for a Mac) | Apache-2.0 |
-| [`server/`](server/) | Go server (Phase 1): so far, the protocol's public rules and the HTTP API for accounts, member logs, envelopes, the stream, silence watches, invites, device linking and share links | AGPL-3.0-or-later |
+| [`server/`](server/) | Go server (Phase 1): so far, the protocol's public rules and the HTTP API for accounts, member logs, envelopes, the stream, silence watches, invites, device linking, share links and push | AGPL-3.0-or-later |
 | `apps/android`, `apps/ios`, `core/` | Apps and the shared Kotlin Multiplatform core — Phase 1 | GPL-3.0-or-later with an app-store permission (draft) |
 
 Full license texts are in [`LICENSES/`](LICENSES/); [`REUSE.toml`](REUSE.toml) maps every path to its license. The app-store permission is a draft awaiting legal review.

@@ -4,6 +4,7 @@
 //
 //	kinfold serve --url https://kinfold.example.org [--listen 127.0.0.1:8080] [--data DIR]
 //	              [--tls-cert FILE --tls-key FILE] [--no-clock-check]
+//	              [--relay https://relay.example] [--push-hosts HOST,…] [--push-hosts-only]
 //
 // serve keeps everything in DIR: the server key (server.key), the database (kinfold.db, with
 // its -wal and -shm files) and the admin socket (admin.sock).
@@ -84,10 +85,22 @@ func serve(args []string) error {
 	certFile := fs.String("tls-cert", "", "TLS certificate; without it, serve plain HTTP behind a TLS proxy")
 	keyFile := fs.String("tls-key", "", "TLS private key")
 	noClock := fs.Bool("no-clock-check", false, "don't ask the kernel whether the clock is synchronized")
+	relay := fs.String("relay", "", "the iOS relay's base URL (API.md §14); without it, iPhones from the App Store get no pushes")
+	pushHosts := fs.String("push-hosts", "", "Web Push hosts allowed without the public-address check, comma-separated")
+	pushHostsOnly := fs.Bool("push-hosts-only", false, "send Web Push only to the hosts in --push-hosts")
 	fs.Parse(args)
 	privateFiles()
 	if !strings.HasPrefix(*url, "https://") || strings.HasSuffix(*url, "/") {
 		return errors.New("--url must be an https URL without a trailing slash")
+	}
+	if *relay != "" && (!strings.HasPrefix(*relay, "https://") || strings.HasSuffix(*relay, "/")) {
+		return errors.New("--relay must be an https URL without a trailing slash")
+	}
+	var hosts []string
+	for _, h := range strings.Split(*pushHosts, ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			hosts = append(hosts, h)
+		}
 	}
 	if err := os.MkdirAll(*data, 0o700); err != nil {
 		return err
@@ -102,7 +115,8 @@ func serve(args []string) error {
 	}
 	defer st.Close()
 	clk := clock.System{CheckSync: !*noClock}
-	handler := api.New(api.Config{URL: *url, Key: key, Clock: clk, Store: st})
+	handler := api.New(api.Config{URL: *url, Key: key, Clock: clk, Store: st,
+		Push: api.PushConfig{Relay: *relay, Hosts: hosts, HostsOnly: *pushHostsOnly}})
 
 	srv := &http.Server{Addr: *listen, Handler: handler,
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second,
@@ -139,6 +153,7 @@ func serve(args []string) error {
 	case <-stop:
 	}
 	handler.CloseStreams(5 * time.Second) // Shutdown leaves upgraded connections alone
+	handler.FlushPushes(5 * time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	srv.Shutdown(ctx)

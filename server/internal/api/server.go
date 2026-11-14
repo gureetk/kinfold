@@ -73,6 +73,8 @@ type Config struct {
 	Random io.Reader
 	// Stream sets the stream's intervals; zero values take the defaults of API.md §7.
 	Stream StreamTimes
+	// Push is how the server reaches push hosts (API.md §12).
+	Push PushConfig
 }
 
 // Server is the HTTP API.
@@ -83,6 +85,7 @@ type Server struct {
 	waits   *hub
 	streams *streams
 	links   *mailboxes
+	sending chan struct{} // pushes in flight
 	start   uint64
 
 	infoMu sync.Mutex
@@ -96,8 +99,9 @@ func New(cfg Config) *Server {
 		cfg.Random = rand.Reader
 	}
 	cfg.Stream = cfg.Stream.withDefaults()
+	cfg.Push = cfg.Push.withDefaults()
 	s := &Server{cfg: cfg, mux: http.NewServeMux(), limiter: newLimiter(cfg.Limits.withDefaults()), waits: newHub(),
-		streams: newStreams(), links: newMailboxes(), start: cfg.Clock.Now()}
+		streams: newStreams(), links: newMailboxes(), sending: make(chan struct{}, maxSending), start: cfg.Clock.Now()}
 	s.routes()
 	return s
 }
@@ -146,6 +150,8 @@ func (s *Server) routes() {
 	h("POST /v1/circles/{id}/envelopes", s.postEnvelope)
 	h("GET /v1/inbox", s.inbox)
 	h("GET /v1/stream", s.openStream)
+	h("PUT /v1/push", s.putPush)
+	h("DELETE /v1/push", s.deletePush)
 
 	h("PUT /v1/circles/{id}/watches/{device_id}", s.putWatch)
 	h("GET /v1/circles/{id}/watches", s.listWatches)
@@ -442,6 +448,8 @@ type Limits struct {
 	EnvelopesPerMinute   int // per device
 	EnvelopesPerHour     int // per device
 	StreamsPerMinute     int // connections, per device
+	WakeNotify           int // uploads with Kinfold-Wake: notify, an hour per device
+	WakeLocate           int // uploads with Kinfold-Wake: locate, an hour per sender and recipient
 	LinksPerDevice       int // link mailboxes an hour, per device (direction 1)
 	LinksPerAddress      int // link mailboxes an hour without a session, per address (direction 2)
 	LinksPerServer       int // link mailboxes an hour without a session, for the whole server
@@ -463,6 +471,8 @@ func (l Limits) withDefaults() Limits {
 	def(&l.EnvelopesPerMinute, 20)
 	def(&l.EnvelopesPerHour, 600)
 	def(&l.StreamsPerMinute, 10)
+	def(&l.WakeNotify, 60)
+	def(&l.WakeLocate, 6)
 	def(&l.LinksPerDevice, 20)
 	def(&l.LinksPerAddress, 6)
 	def(&l.LinksPerServer, 60)

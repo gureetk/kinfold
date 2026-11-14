@@ -176,6 +176,9 @@ func (s *Server) forgetDevice(q *request, tx store.Tx, id []byte) error {
 	if err := tx.DeleteSessionsOf(id); err != nil {
 		return err
 	}
+	if err := tx.DeletePush(id); err != nil {
+		return err
+	}
 	q.afterCommit(func() { s.endStream(id, nil) })
 	return tx.DeleteDevice(id)
 }

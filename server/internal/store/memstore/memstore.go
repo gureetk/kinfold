@@ -39,6 +39,7 @@ type Store struct {
 	watches    map[string]store.Watch // circle ‖ device ‖ watcher
 	heard      map[string]heardAt     // circle ‖ device
 	shares     map[string]store.Share
+	pushes     map[string]store.PushReg
 }
 
 type heardAt struct {
@@ -52,7 +53,8 @@ func New() *Store {
 		devices: map[string]store.Device{}, challenges: map[string]store.Challenge{},
 		sessions: map[string]store.Session{}, circles: map[string]*circleLog{},
 		removals: map[string]store.Removal{}, seen: map[string]seenRecord{}, invites: map[string]store.Invite{},
-		watches: map[string]store.Watch{}, heard: map[string]heardAt{}, shares: map[string]store.Share{}, nextSeq: 1}
+		watches: map[string]store.Watch{}, heard: map[string]heardAt{}, shares: map[string]store.Share{},
+		pushes: map[string]store.PushReg{}, nextSeq: 1}
 }
 
 // tx records how to undo each write, so that a failed Update leaves nothing behind.
@@ -429,6 +431,12 @@ func (t *tx) SharesOf(device []byte) ([]store.Share, error) {
 	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i].ID, out[j].ID) < 0 })
 	return out, nil
 }
+
+// ---- push registrations ----
+
+func (t *tx) PutPush(v store.PushReg) error             { set(t, t.s.pushes, string(v.Device), v); return nil }
+func (t *tx) Push(device []byte) (store.PushReg, error) { return get(t.s.pushes, device) }
+func (t *tx) DeletePush(device []byte) error            { del(t, t.s.pushes, string(device)); return nil }
 
 // ---- sweeping ----
 

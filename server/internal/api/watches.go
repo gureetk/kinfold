@@ -258,8 +258,14 @@ func (s *Server) CheckSilences() error {
 			case w.Alerted || now < w.Since || now-w.Since < uint64(w.AfterMin)*minute:
 				continue
 			case w.WokeAt == 0:
-				// The wake-up itself is a push (§12); a device on its stream needs none.
+				// A device on its stream needs no wake-up; others get a location push where
+				// they can take one, otherwise a background one.
 				w.WokeAt = now
+				j, err := s.preparePush(tx, w.Device, push.Wake, nil, push.Location, push.Background, now)
+				if err != nil {
+					return err
+				}
+				q.afterCommit(func() { s.send([]*pushJob{j}) })
 			case now < w.WokeAt || now-w.WokeAt < WakeWait:
 				continue
 			default:
@@ -273,7 +279,15 @@ func (s *Server) CheckSilences() error {
 					return err
 				}
 				body := push.SilenceBody(w.Circle, w.Device, last)
-				q.afterCommit(func() { s.alert(devs, body, now) })
+				var jobs []*pushJob
+				for _, d := range devs {
+					j, err := s.preparePush(tx, d.ID, push.Silence, body, push.Alert, push.Alert, now)
+					if err != nil {
+						return err
+					}
+					jobs = append(jobs, j)
+				}
+				q.afterCommit(func() { s.alert(devs, body, now); s.send(jobs) })
 			}
 			if err := tx.PutWatch(w); err != nil {
 				return err
@@ -283,8 +297,8 @@ func (s *Server) CheckSilences() error {
 	})
 }
 
-// alert sends a silence push to each of the watcher's devices on a stream. (Devices that
-// aren't get it by push, §12.)
+// alert sends a silence push to each of the watcher's devices on a stream; the others get
+// it by push (§12).
 func (s *Server) alert(devs []store.Device, body []byte, now uint64) {
 	for _, d := range devs {
 		st := s.streams.of(d.ID)

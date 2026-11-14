@@ -327,6 +327,7 @@ func (s *Server) openStream(q *request) error {
 		return nil
 	}
 	defer s.streams.remove(st)
+	s.tellDropped(st.dev.ID) // a push registration that died while the device was away
 	s.runStream(st, since)
 	return nil
 }
