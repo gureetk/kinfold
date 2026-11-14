@@ -6,6 +6,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -136,5 +137,24 @@ func TestSavedLimits(t *testing.T) {
 	})
 	if l, err := savedLimits(st); err != nil || l != (api.Limits{SearchPerMinute: 5, WakeNotify: 120}) {
 		t.Fatalf("two set: %+v %v", l, err)
+	}
+}
+
+func TestParseProxies(t *testing.T) {
+	got, err := parseProxies(" 127.0.0.1, ::1,10.1.2.3/8 ,::ffff:192.168.0.0/112,, 2001:db8::/48")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "[127.0.0.1/32 ::1/128 10.0.0.0/8 192.168.0.0/16 2001:db8::/48]"
+	if fmt.Sprint(got) != want {
+		t.Errorf("got %v, want %s", got, want)
+	}
+	if got, err := parseProxies(""); err != nil || got != nil {
+		t.Errorf("none: %v %v", got, err)
+	}
+	for _, bad := range []string{"localhost", "127.0.0.1:80", "fe80::1%eth0", "10.0.0.0/33", "0.0.0.0/0", "::/0", "::ffff:0.0.0.0/96"} {
+		if _, err := parseProxies(bad); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
 	}
 }

@@ -115,7 +115,7 @@ func (s *Server) createLink(q *request) error {
 		m.account, m.creator = q.dev.Account, q.dev.ID
 	} else {
 		// Without a session, every attempt counts, refused or not (API.md §3).
-		if ok, wait := s.limiter.allow("link/address/"+clientAddress(q.r), l.LinksPerAddress, hour, q.now); !ok {
+		if ok, wait := s.limiter.allow("link/address/"+s.clientAddress(q.r), l.LinksPerAddress, hour, q.now); !ok {
 			return rateLimited(wait)
 		}
 		if ok, wait := s.limiter.allow("link/server", l.LinksPerServer, hour, q.now); !ok {

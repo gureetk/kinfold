@@ -95,10 +95,14 @@ type call struct {
 	ctype        string
 	token        []byte
 	header       map[string]string
+	remote       string // the connection's address; httptest's 192.0.2.1:1234 if empty
 }
 
 func (e *env) do(c call) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(c.method, c.path, bytes.NewReader(c.body))
+	if c.remote != "" {
+		req.RemoteAddr = c.remote
+	}
 	req.Header.Set("Kinfold-Api", "1")
 	if c.ctype != "" {
 		req.Header.Set("Content-Type", c.ctype)

@@ -102,7 +102,7 @@ Sizes that every implementation must agree on are in spec §16.6. The API adds t
 | Log page | 1,024 entries or 4 MB, whichever comes first |
 | Inbox page | 256 records or 4 MB |
 
-Default rate limits. The operator can change them (`kinfold limits`, §16); clients MUST handle 429 at any of them. A limit per address counts the address of the connection, which the server keeps in memory for the length of the window and never writes down. A refused request counts like an accepted one. So does an envelope posted again, which the server checks again (§1); a log entry posted again doesn't.
+Default rate limits. The operator can change them (`kinfold limits`, §16); clients MUST handle 429 at any of them. A limit per address counts the address of the connection. On a connection from a reverse proxy the operator has named (`kinfold serve --trusted-proxy`), it counts the client's address instead: the last address in `X-Forwarded-For` that isn't itself a named proxy. The server ignores that header on every other connection, so a client can't choose the address it is counted under. An IPv6 address counts by its /64, which one machine can hold whole. The server keeps the address in memory for the length of the window and never writes it down. A refused request counts like an accepted one. So does an envelope posted again, which the server checks again (§1); a log entry posted again doesn't.
 
 | What | Default | Setting (§16) |
 | --- | --- | --- |
