@@ -6,7 +6,6 @@ import ca.gureet.kinfold.core.crypto.Primitives
 import ca.gureet.kinfold.core.wire.Reader
 import ca.gureet.kinfold.core.wire.concat
 import ca.gureet.kinfold.core.wire.encode
-import ca.gureet.kinfold.core.wire.malformed
 
 /**
  * Why a device refused a message of an invite, a link or a share link (PROTOCOL.md §9, §10, §12).
@@ -68,13 +67,6 @@ internal inline fun <T> parsing(read: () -> T): T = try {
     read()
 } catch (_: ProtocolException) {
     refuse(RendezvousException.Failure.MALFORMED)
-}
-
-/** Strict UTF-8, or `malformed`. */
-internal fun Reader.utf8(): String = try {
-    vec16().decodeToString(throwOnInvalidSequence = true)
-} catch (_: CharacterCodingException) {
-    malformed()
 }
 
 /**
