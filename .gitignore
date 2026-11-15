@@ -6,3 +6,4 @@ node_modules/
 .gradle/
 .kotlin/
 reference/platforms/jvm/build/
+core/build/

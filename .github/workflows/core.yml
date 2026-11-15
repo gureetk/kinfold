@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: CC0-1.0
+name: Core
+
+on:
+  push:
+    paths: ["core/**", "spec/vectors/**", "spec/PROTOCOL.md", ".github/workflows/core.yml"]
+  pull_request:
+    paths: ["core/**", "spec/vectors/**", "spec/PROTOCOL.md", ".github/workflows/core.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Gradle 9.9.1, checked against its published SHA-256
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/gradle.zip" https://services.gradle.org/distributions/gradle-9.9.1-bin.zip
+          echo "d8a18a7a841dd5df825d35a685fad6f2d7f12ac0c280e57b67c27b4a520ba228  $RUNNER_TEMP/gradle.zip" | sha256sum -c
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-9.9.1/bin" >> "$GITHUB_PATH"
+
+      # Every artifact is checked against gradle/verification-metadata.xml. Maven Central
+      # sometimes answers 429, so a failed download is tried again after a pause; a hash
+      # that doesn't match fails at once.
+      - name: The vectors on the JVM
+        working-directory: core
+        run: |
+          log="$RUNNER_TEMP/gradle.log"
+          for attempt in 1 2 3 4; do
+            if gradle --no-daemon --console=plain check > "$log" 2>&1; then
+              cat "$log"
+              exit 0
+            fi
+            cat "$log"
+            if grep -q -E "Dependency verification failed|There were failing tests|Compilation error|Kotlin compiler" "$log"; then exit 1; fi
+            sleep $((attempt * 30))
+          done
+          exit 1
