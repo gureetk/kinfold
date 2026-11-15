@@ -161,6 +161,8 @@ for c in L["cases"]:
     secs = {**secrets, **{int(k): hx(x) for k, x in c.get("new_epoch_secrets", {}).items()}}
     for w in c.get("withheld_epochs", []):
         secs.pop(w, None)            # the device under test never received this secret (6.5)
+    for k, x in c.get("wrong_epoch_secrets", {}).items():
+        secs[int(k)] = hx(x)         # it holds this one instead, which doesn't match the log's commitment
     for e in c["entries"]:
         s0, p0 = run(s0, p0, e, secs, c["name"])
 

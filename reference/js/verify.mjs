@@ -396,6 +396,8 @@ for (const c of L.cases) {
     // `withheld_epochs`: the client under test never received these secrets (§6.5).
     const secrets = new Map(allSecrets);
     for (const ep of c.withheld_epochs ?? []) secrets.delete(Number(ep));
+    // `wrong_epoch_secrets`: it holds these instead, which don't match the log's commitments, so it must discard them.
+    for (const [k, v] of Object.entries(c.wrong_epoch_secrets ?? {})) secrets.set(Number(k), X(v));
     caseBases[c.base_seq] = (caseBases[c.base_seq] ?? 0) + 1;
     check(`case ${c.name} starts from an empty log, the base log or the whole log`, [-1, L.base_seq, L.final_seq].includes(c.base_seq));
     let states = c.base_seq === -1 ? { client: K.emptyState(), pub: K.emptyState() } : { ...mainStates[c.base_seq] };
@@ -408,9 +410,9 @@ for (const c of L.cases) {
     check(`case ${c.name}: its last entry shows the state it leaves, unless that entry is fatal`, ('state_after' in last) === (last.result !== 'fatal'));
   });
 }
-checkEq('case counts by the outcome of the last entry (spec/vectors/README.md)', caseCounts, { fatal: 99, rejected: 21, accepted: 33, deferred: 1 });
+checkEq('case counts by the outcome of the last entry (spec/vectors/README.md)', caseCounts, { fatal: 104, rejected: 45, accepted: 54, deferred: 3 });
 checkEq('case counts by starting point: empty log, base log, whole log',
-  [caseBases[-1], caseBases[L.base_seq], caseBases[L.final_seq]], [9, 96, 49]);
+  [caseBases[-1], caseBases[L.base_seq], caseBases[L.final_seq]], [11, 146, 49]);
 
 // ---------------------------------------------------------------------------
 // Epoch wraps: every recipient opens its wrap and checks the commitment
