@@ -24,14 +24,15 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * [Crypto] on the JVM. Tink's own code does Ed25519, X25519, HKDF and HPKE; the JDK does
- * SHA-2, AES-GCM and randomness.
+ * [Crypto] on the JVM and on Android, compiled against Tink on one and tink-android on the
+ * other. Tink's own code does Ed25519, X25519, HKDF and HPKE; the platform does SHA-2,
+ * AES-GCM and randomness.
  *
  * Verification is Tink's own Java code, named directly, as PROTOCOL.md Appendix C requires:
- * Tink's keyset path, and the JDK's `Signature.getInstance("Ed25519")`, hand it to whichever
- * provider is installed, which could be Bouncy Castle.
+ * Tink's keyset path, and `Signature.getInstance("Ed25519")`, hand it to whichever provider is
+ * installed, which on a phone could be Bouncy Castle or a Conscrypt of another version.
  */
-class JvmCrypto : Crypto {
+class TinkCrypto : Crypto {
     private val random = SecureRandom()
 
     override suspend fun sha256(data: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(data)

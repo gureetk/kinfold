@@ -2,13 +2,13 @@
 package ca.gureet.kinfold.core
 
 import ca.gureet.kinfold.core.crypto.Crypto
-import ca.gureet.kinfold.core.crypto.JvmCrypto
+import ca.gureet.kinfold.core.crypto.TinkCrypto
 import java.io.File
 
 /** spec/vectors/kinfold-v0.json, which the build names in the system property `kinfold.vectors`. */
 private val vectorsFile: File by lazy { File(checkNotNull(System.getProperty("kinfold.vectors")) { "kinfold.vectors is not set" }) }
 
-actual fun platformCrypto(): Crypto = JvmCrypto()
+actual fun platformCrypto(): Crypto = TinkCrypto()
 
 actual fun vectorsText(): String = vectorsFile.readText()
 
