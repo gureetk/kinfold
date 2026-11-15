@@ -7,7 +7,6 @@ import ca.gureet.kinfold.core.wire.Reader
 import ca.gureet.kinfold.core.wire.concat
 import ca.gureet.kinfold.core.wire.encode
 import ca.gureet.kinfold.core.wire.readAll
-import java.security.MessageDigest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -71,9 +70,10 @@ class WireTest {
     }
 
     @Test
-    fun paddingVectors() {
+    fun paddingVectors() = sync {
         val v = Vectors.group("padding")
-        val sha256 = { b: ByteArray -> MessageDigest.getInstance("SHA-256").digest(b) }
+        val crypto = platformCrypto()
+        suspend fun sha256(b: ByteArray) = crypto.sha256(b)
         for (c in v.list("valid")) {
             val payload = ByteArray(c.int("payload_length")) { c.hex("payload_byte")[0] }
             val padded = Padding.pad(payload)

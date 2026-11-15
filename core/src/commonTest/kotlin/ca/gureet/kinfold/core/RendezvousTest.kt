@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
 package ca.gureet.kinfold.core
 
-import ca.gureet.kinfold.core.crypto.JvmCrypto
 import ca.gureet.kinfold.core.crypto.Primitives
 import ca.gureet.kinfold.core.identity.DeviceCert
 import ca.gureet.kinfold.core.identity.DeviceKind
@@ -24,8 +23,6 @@ import ca.gureet.kinfold.core.wire.Bytes
 import ca.gureet.kinfold.core.wire.Codes
 import ca.gureet.kinfold.core.wire.concat
 import ca.gureet.kinfold.core.wire.toHex
-import com.google.gson.JsonObject
-import com.google.gson.JsonParser
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -39,7 +36,7 @@ import kotlin.test.fail
  * are opened, and sealed here and opened again.
  */
 class RendezvousTest {
-    private val crypto = JvmCrypto()
+    private val crypto = platformCrypto()
     private val p = Primitives(crypto)
     private val devices: Map<String, JsonObject> = Vectors.group("identities").entrySet()
         .flatMap { (_, person) -> person.asJsonObject.getAsJsonObject("devices").entrySet().map { it.value.asJsonObject } }

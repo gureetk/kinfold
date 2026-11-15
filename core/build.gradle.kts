@@ -20,10 +20,6 @@ kotlin {
             // Ed25519, X25519, HKDF and HPKE from Tink's own code (PROTOCOL.md Appendix C)
             implementation("com.google.crypto.tink:tink:1.24.0")
         }
-        jvmTest.dependencies {
-            // Reads the vectors; already a dependency of Tink, at the version Tink asks for
-            implementation("com.google.code.gson:gson:2.13.2")
-        }
     }
 }
 

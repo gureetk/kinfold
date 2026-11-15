@@ -2,7 +2,6 @@
 package ca.gureet.kinfold.core
 
 import ca.gureet.kinfold.core.crypto.HpkeKey
-import ca.gureet.kinfold.core.crypto.JvmCrypto
 import ca.gureet.kinfold.core.crypto.Label
 import ca.gureet.kinfold.core.crypto.Primitives
 import ca.gureet.kinfold.core.log.CircleState
@@ -23,7 +22,6 @@ import ca.gureet.kinfold.core.wire.Bytes
 import ca.gureet.kinfold.core.wire.Padding
 import ca.gureet.kinfold.core.wire.concat
 import ca.gureet.kinfold.core.wire.encode
-import com.google.gson.JsonObject
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -38,7 +36,7 @@ import kotlin.test.fail
  * check and nothing else, built from the vectors' server, people and devices.
  */
 class ServerRulesTest {
-    private val crypto = JvmCrypto()
+    private val crypto = platformCrypto()
     private val p = Primitives(crypto)
     private val auth = Vectors.group("auth")
     private val url = auth.str("server_url")

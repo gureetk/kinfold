@@ -1,26 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
 package ca.gureet.kinfold.core
 
-import ca.gureet.kinfold.core.crypto.JvmCrypto
 import ca.gureet.kinfold.core.crypto.Primitives
-import com.google.crypto.tink.InsecureSecretKeyAccess
-import com.google.crypto.tink.hybrid.HpkeParameters
-import com.google.crypto.tink.hybrid.HpkePrivateKey
-import com.google.crypto.tink.hybrid.HpkePublicKey
-import com.google.crypto.tink.hybrid.internal.HpkeContext
-import com.google.crypto.tink.hybrid.internal.HpkeKemKeyFactory
-import com.google.crypto.tink.hybrid.internal.HpkePrimitiveFactory
-import com.google.crypto.tink.util.Bytes
-import com.google.crypto.tink.util.SecretBytes
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 
-/** HPKE (PROTOCOL.md §3.5) and the `hpke_rfc9180` and `x25519` vectors. */
+/** HPKE (PROTOCOL.md §3.5) and the `hpke_rfc9180` and `x25519` vectors; the RFC's own messages are opened in `TinkHpkeTest` on the JVM. */
 class HpkeTest {
-    private val crypto = JvmCrypto()
+    private val crypto = platformCrypto()
     private val p = Primitives(crypto)
     private val v = Vectors.group("hpke_rfc9180")
 
@@ -37,34 +27,6 @@ class HpkeTest {
         assertContentEquals(v.hex("pkRm"), crypto.x25519(v.hex("skRm")).publicKey)
         assertContentEquals(v.hex("pkEm"), crypto.x25519(v.hex("skEm")).publicKey)
         assertContentEquals(v.hex("pkEm"), v.hex("enc"))
-    }
-
-    /**
-     * The RFC's messages carry `aad`, which the protocol never uses and Tink's public API
-     * doesn't take, so they are opened through Tink's own HPKE context: the code that
-     * [JvmCrypto]'s seals and opens run on.
-     */
-    @Test
-    fun rfcMessages() {
-        val suite = HpkeParameters.builder()
-            .setVariant(HpkeParameters.Variant.NO_PREFIX)
-            .setKemId(HpkeParameters.KemId.DHKEM_X25519_HKDF_SHA256)
-            .setKdfId(HpkeParameters.KdfId.HKDF_SHA256)
-            .setAeadId(HpkeParameters.AeadId.AES_256_GCM)
-            .build()
-        val public = HpkePublicKey.create(suite, Bytes.copyFrom(v.hex("pkRm")), null)
-        val private = HpkePrivateKey.create(public, SecretBytes.copyFrom(v.hex("skRm"), InsecureSecretKeyAccess.get()))
-        val context = HpkeContext.createRecipientContext(
-            v.hex("enc"),
-            HpkeKemKeyFactory.createPrivate(private),
-            HpkePrimitiveFactory.createKem(suite.kemId),
-            HpkePrimitiveFactory.createKdf(suite.kdfId),
-            HpkePrimitiveFactory.createAead(suite.aeadId),
-            v.hex("info"),
-        )
-        val messages = v.list("encryptions")
-        assertEquals(2, messages.size)
-        for (m in messages) assertContentEquals(m.hex("pt"), context.open(m.hex("ct"), m.hex("aad")))
     }
 
     @Test

@@ -1,13 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
 package ca.gureet.kinfold.core
 
-import ca.gureet.kinfold.core.crypto.JvmCrypto
 import ca.gureet.kinfold.core.crypto.Label
 import ca.gureet.kinfold.core.crypto.Primitives
 import ca.gureet.kinfold.core.wire.Base64Url
-import com.google.gson.JsonObject
-import java.util.Base64
-import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -17,7 +13,7 @@ import kotlin.test.assertTrue
 
 /** The `primitives` vectors: H, KDF, labelled signatures and base64url (PROTOCOL.md §2, §3.3). */
 class PrimitivesTest {
-    private val p = Primitives(JvmCrypto())
+    private val p = Primitives(platformCrypto())
     private val v = Vectors.group("primitives")
 
     private fun label(c: JsonObject): Label = checkNotNull(Label.ofText(c.str("label")))
@@ -54,15 +50,6 @@ class PrimitivesTest {
         }
         for (bad in listOf("-w==", "-w=", "+w", "/w", "-x", "A", "AAAAA", "-w ", " -w", "é", "-_8\n")) {
             assertNull(Base64Url.decode(bad), "refuses \"$bad\"")
-        }
-        // Against the JDK's encoder, at every length up to 200 bytes
-        val jdk = Base64.getUrlEncoder().withoutPadding()
-        val random = Random(1)
-        for (n in 0..200) {
-            val bytes = random.nextBytes(n)
-            val text = jdk.encodeToString(bytes)
-            assertEquals(text, Base64Url.encode(bytes))
-            assertContentEquals(bytes, Base64Url.decode(text))
         }
     }
 

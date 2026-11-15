@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
 package ca.gureet.kinfold.core
 
-import ca.gureet.kinfold.core.crypto.JvmCrypto
 import ca.gureet.kinfold.core.crypto.Label
 import ca.gureet.kinfold.core.crypto.Primitives
 import ca.gureet.kinfold.core.identity.DeviceCert
@@ -22,8 +21,6 @@ import ca.gureet.kinfold.core.rendezvous.ShareLinks
 import ca.gureet.kinfold.core.wire.Base64Url
 import ca.gureet.kinfold.core.wire.Bytes
 import ca.gureet.kinfold.core.wire.encode
-import com.google.gson.JsonObject
-import com.google.gson.JsonParser
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -34,7 +31,7 @@ import kotlin.test.fail
  * else; the vector file holds only two refusals. Built from the vectors' people and devices.
  */
 class RendezvousRulesTest {
-    private val crypto = JvmCrypto()
+    private val crypto = platformCrypto()
     private val p = Primitives(crypto)
     private val people = Vectors.group("identities")
     private val devices: Map<String, JsonObject> = people.entrySet()

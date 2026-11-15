@@ -2,7 +2,6 @@
 package ca.gureet.kinfold.core
 
 import ca.gureet.kinfold.core.crypto.HpkeKey
-import ca.gureet.kinfold.core.crypto.JvmCrypto
 import ca.gureet.kinfold.core.crypto.Label
 import ca.gureet.kinfold.core.crypto.Primitives
 import ca.gureet.kinfold.core.log.CircleState
@@ -21,7 +20,6 @@ import ca.gureet.kinfold.core.wire.Bytes
 import ca.gureet.kinfold.core.wire.Codes
 import ca.gureet.kinfold.core.wire.hexBytes
 import ca.gureet.kinfold.core.wire.toHex
-import com.google.gson.JsonObject
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -35,7 +33,7 @@ import kotlin.test.fail
  * judged as a server judges it, and every push opened or dropped as a device does.
  */
 class ServerTest {
-    private val crypto = JvmCrypto()
+    private val crypto = platformCrypto()
     private val p = Primitives(crypto)
     private val devices: Map<String, JsonObject> = Vectors.group("identities").entrySet()
         .flatMap { (_, person) -> person.asJsonObject.getAsJsonObject("devices").entrySet().map { it.value.asJsonObject } }

@@ -3,7 +3,6 @@ package ca.gureet.kinfold.core
 
 import ca.gureet.kinfold.core.crypto.Crypto
 import ca.gureet.kinfold.core.crypto.Ed25519Checks
-import ca.gureet.kinfold.core.crypto.JvmCrypto
 import ca.gureet.kinfold.core.crypto.Primitives
 import ca.gureet.kinfold.core.wire.hexBytes
 import kotlin.test.Test
@@ -13,7 +12,7 @@ import kotlin.test.assertTrue
 
 /** The `ed25519` vectors: the verdict PROTOCOL.md §3.3 requires on every edge case. */
 class Ed25519Test {
-    private val p = Primitives(JvmCrypto())
+    private val p = Primitives(platformCrypto())
     private val v = Vectors.group("ed25519")
 
     @Test
@@ -43,7 +42,7 @@ class Ed25519Test {
      */
     @Test
     fun byteChecksAlone() = sync {
-        val permissive = Primitives(AcceptsAll(JvmCrypto()))
+        val permissive = Primitives(AcceptsAll(platformCrypto()))
         var refused = 0
         for (s in v.list("signatures")) {
             val verdict = permissive.verifyMessage(s.hex("pub"), s.hex("msg"), s.hex("sig"))
@@ -60,7 +59,7 @@ class Ed25519Test {
     /** Each bound of §3.3, on either side. */
     @Test
     fun bounds() = sync {
-        val permissive = Primitives(AcceptsAll(JvmCrypto()))
+        val permissive = Primitives(AcceptsAll(platformCrypto()))
         val key = v.list("keys").first { it.str("note") == "an ordinary key" }.hex("pub")
         val msg = byteArrayOf(1, 2, 3)
         suspend fun accepts(pub: ByteArray, r: ByteArray, s: ByteArray) = permissive.verifyMessage(pub, msg, r + s)

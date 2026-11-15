@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
 package ca.gureet.kinfold.core
 
-import ca.gureet.kinfold.core.crypto.JvmCrypto
 import ca.gureet.kinfold.core.crypto.Primitives
 import ca.gureet.kinfold.core.log.CircleState
 import ca.gureet.kinfold.core.log.MemberLog
@@ -9,11 +8,6 @@ import ca.gureet.kinfold.core.log.Outcome
 import ca.gureet.kinfold.core.log.Role
 import ca.gureet.kinfold.core.wire.hexBytes
 import ca.gureet.kinfold.core.wire.toHex
-import com.google.gson.JsonArray
-import com.google.gson.JsonElement
-import com.google.gson.JsonNull
-import com.google.gson.JsonObject
-import com.google.gson.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -24,7 +18,7 @@ import kotlin.test.fail
  * epoch secrets and as a server in public mode, outcome by outcome and state by state.
  */
 class LogTest {
-    private val p = Primitives(JvmCrypto())
+    private val p = Primitives(platformCrypto())
     private val v = Vectors.group("log")
     private val entries = v.list("entries")
     private val secrets: Map<Long, ByteArray> =
@@ -53,9 +47,9 @@ class LogTest {
         var checked = 0
         for (c in cases) {
             val keys = secrets.toMutableMap()
-            c.getAsJsonObject("new_epoch_secrets")?.entrySet()?.forEach { keys[it.key.toLong()] = hexBytes(it.value.asString) }
-            c.getAsJsonArray("withheld_epochs")?.forEach { keys.remove(it.asLong) }
-            c.getAsJsonObject("wrong_epoch_secrets")?.entrySet()?.forEach { keys[it.key.toLong()] = hexBytes(it.value.asString) }
+            c.optObject("new_epoch_secrets")?.entrySet()?.forEach { keys[it.key.toLong()] = hexBytes(it.value.asString) }
+            c.optArray("withheld_epochs")?.forEach { keys.remove(it.asLong) }
+            c.optObject("wrong_epoch_secrets")?.entrySet()?.forEach { keys[it.key.toLong()] = hexBytes(it.value.asString) }
             val base = c.int("base_seq")
             var client = replay(base, secrets)
             var server = replay(base, null)
@@ -88,7 +82,7 @@ class LogTest {
     private suspend fun check(name: String, state: CircleState, e: JsonObject, keys: Map<Long, ByteArray>?, private: Boolean): CircleState {
         val mode = if (private) "client" else "server"
         val wantResult = e.str(if (private) "result" else "public_result")
-        val wantReason = e.get(if (private) "reason" else "public_reason")?.takeUnless { it.isJsonNull }?.asString
+        val wantReason = e.opt(if (private) "reason" else "public_reason")?.takeUnless { it.isJsonNull }?.asString
         return when (val o = MemberLog.apply(p, state, e.hex("raw"), keys)) {
             is Outcome.Fatal -> {
                 assertEquals("fatal" to wantReason, "fatal" to o.reason.code, "$name ($mode)")
@@ -98,7 +92,7 @@ class LogTest {
             is Outcome.Applied -> {
                 assertEquals(wantResult to wantReason, o.result.name.lowercase() to o.reason?.code, "$name ($mode)")
                 assertEquals(e.hex("hash").toHex(), o.state.head.hex, "$name: hash")
-                val want = e.getAsJsonObject("state_after")
+                val want = e.optObject("state_after")
                 if (want != null) {
                     val expected = if (private) want else publicOnly(want)
                     val actual = stateJson(o.state, private)
