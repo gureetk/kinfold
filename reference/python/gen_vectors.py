@@ -1705,6 +1705,8 @@ bad("bad_ciphertext", "payload sealed under a different message secret",
     env("bc", jp, 1, both, LOC, payload_secret=rnd("other-secret"))[0], ap, "bad_ciphertext")
 bad("bad_padding", "no 0x80 marker", env("bp", jp, 1, both, LOC, pad_override=ev.payload_bytes(LOC) + bytes(
     256 - len(ev.payload_bytes(LOC))))[0], ap, "bad_padding")
+bad("bad_padding_size", "padded correctly, but to 300 bytes, which is no bucket",
+    env("bs", jp, 1, both, LOC, pad_override=pad_to(ev.payload_bytes(LOC), 300))[0], ap, "bad_padding")
 bad("bad_payload", "payload is not a JSON object with \"t\"", env("bj", jp, 1, both, b"[1,2,3]")[0], ap,
     "bad_payload")
 for tag, desc, text in [
@@ -1743,8 +1745,8 @@ DENY = [
      others(jp), {"t": "watch_grant", "grant": b64u(GRANT)}, ap),
     ("identity_key_wrong_seed", "an `ik` whose seed isn't the identity key the log shows", ap, ev.DIRECT, [at],
      {"t": "ik", "ik": b64u(A.iks[0]), "chain": b64u(A.chain)}, at),
-    ("identity_key_other_account", "an `ik` from another person's phone", jp, ev.DIRECT, [at],
-     {"t": "ik", "ik": b64u(A.ik), "chain": b64u(A.chain)}, at),
+    ("identity_key_other_account", "an `ik` from another person's phone, holding that person's own key", jp,
+     ev.DIRECT, [at], {"t": "ik", "ik": b64u(J.ik), "chain": b64u(J.chain)}, at),
     ("place_teen_claims_other_creator", "Maya, a teen, sends a place whose creator is Jordan", mp, ev.CIRCLE,
      others(mp), {**PLACE, "id": b64u(ev.place_id(J.acc, PLACE_N)), "creator": b64u(J.acc)}, jp),
     ("place_id_mismatch", "a place whose id isn't the hash of its creator and n", jp, ev.CIRCLE, others(jp),
