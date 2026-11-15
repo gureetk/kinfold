@@ -144,12 +144,14 @@ class LogBuilder:
         self.records, self.raws = [], []
         self.clock = T0 - 10 * MIN
         self.withheld = set()
+        self.wrong = {}                           # epoch -> a secret the device holds that doesn't match the log
 
     def fork(self):
         b = LogBuilder()
         b.state, b.pstate, b.secrets = copy.deepcopy(self.state), copy.deepcopy(self.pstate), dict(self.secrets)
         b.clock = self.clock
         b.withheld = set(self.withheld)
+        b.wrong = dict(self.wrong)
         return b
 
     def head(self, t, author, created_at=None, **over):
@@ -181,8 +183,9 @@ class LogBuilder:
     def commit(self, desc, author, raw, expect, reason=None, details_pt=None, extra=None, quiet=False):
         """Apply `raw` as a client and as a server, assert the outcome, and record it.
         quiet: leave the state out of the record (bulk set-up entries)."""
+        held = {k: self.wrong.get(k, v) for k, v in self.secrets.items() if k not in self.withheld}
         try:
-            new, res, why = lg.apply(self.state, raw, {k: v for k, v in self.secrets.items() if k not in self.withheld})
+            new, res, why = lg.apply(self.state, raw, held)
         except lg.Fatal as e:
             new, res, why = None, "fatal", e.reason
         try:
@@ -327,6 +330,8 @@ def case(name, desc, fn, base="13"):
     rec = dict(name=name, description=desc, base_seq=base_seq, entries=b.records)
     if b.withheld:
         rec["withheld_epochs"] = sorted(b.withheld)
+    if b.wrong:
+        rec["wrong_epoch_secrets"] = {str(k): v.hex() for k, v in sorted(b.wrong.items())}
     added = {str(k): v.hex() for k, v in b.secrets.items() if k not in B.secrets and k <= b.state.epoch}
     if added:
         rec["new_epoch_secrets"] = added
@@ -393,9 +398,9 @@ def c_details_length(b):
     b.commit("POLICY whose details field is 539 bytes", jp, lg.build_entry(jp.dsk, hdr, body), "fatal", "malformed")
 
 
-def genesis_entry(b, author, cert, bundle, signer, details_secret=None, chain=b"", **over):
+def genesis_entry(b, author, cert, bundle, signer, details_secret=None, chain=b"", name="Family", **over):
     hdr, f = b.head(lg.GENESIS, author, **over)
-    pt = lg.enc_genesis_details("Family")
+    pt = lg.enc_genesis_details(name)
     body = (cert + vec16(chain) + bundle + lg.epoch_commit(0, b.secrets[0])
             + b.details(hdr, f, pt, details_secret or b.secrets[0]))
     return lg.build_entry(signer, hdr, body), pt
@@ -771,15 +776,15 @@ def c_too_many_devices(b):
 
 def c_pause_cap(b):
     ids = sorted(rnd(f"pause/cap/{i}", 8) for i in range(17))
-    for i in range(16):                          # the first two end at the same time, earlier than the rest
-        end = T0 + 3 * DAY + (0 if i < 2 else i) * HOUR
-        policy(b, jp, f"Jordan grants pause {i + 1} of 16",
+    for i in reversed(range(16)):                # from the highest ID down; the two highest end first, together
+        end = T0 + 3 * DAY + (0 if i >= 14 else 16 - i) * HOUR
+        policy(b, jp, f"Jordan grants pause {16 - i} of 16",
                lg.enc_policy(lg.GRANT_PAUSE, M.acc, pause_id=ids[i], kind=1, start=end - HOUR, end=end), quiet=True)
-    policy(b, jp, "a 17th pause: the stored pause that ends earliest is dropped, and of two that end together the "
-                  "one with the lower ID",
+    policy(b, jp, "a 17th pause: the stored pause that ends earliest is dropped, though it has neither the lowest ID "
+                  "nor the oldest grant; of the two that end together, the one with the lower ID",
            lg.enc_policy(lg.GRANT_PAUSE, M.acc, pause_id=ids[16], kind=2, start=T0 + 9 * DAY, end=T0 + 9 * DAY + HOUR))
-    kept = [p["id"] for p in maya(b)["pauses"]]
-    assert len(kept) == 16 and ids[0].hex() not in kept and ids[1].hex() in kept and ids[16].hex() in kept
+    kept = {p["id"] for p in maya(b)["pauses"]}
+    assert len(kept) == 16 and ids[14].hex() not in kept and {ids[0].hex(), ids[15].hex(), ids[16].hex()} <= kept
 
 
 # --- key bundles (4.4) ---------------------------------------------------------------------------
@@ -880,6 +885,169 @@ def tz_bytes_rules(tz: bytes) -> bytes:
     return lg.enc_policy(lg.SET_RULES, M.acc, rules={**RULES, "tz": tz.decode("latin-1")})
 
 
+def win(start, end, kind=1, days=0b0011111):
+    """One schedule window (5.5); by default a pause window on weekdays."""
+    return dict(kind=kind, days=days, start_min=start, end_min=end)
+
+
+UPPER_RULES = dict(pause_mode=2, approx_mode=2, speed_alert_kmh=300, phone_use_alerts=1, history_days=30,
+                   silence_alert_min=1440, tz="Az09/_-+" * 8,          # 64 bytes, every kind of allowed character
+                   schedule=[win(i * 45, 1440 if i == 31 else i * 45 + 30, kind=1 + i % 2, days=127)
+                             for i in range(32)])
+LOWER_RULES = dict(pause_mode=0, approx_mode=0, speed_alert_kmh=0, phone_use_alerts=0, history_days=1,
+                   silence_alert_min=15, tz="UTC", schedule=[win(0, 1, days=1)])
+
+
+# --- the edges of the private rules, of wrap coverage and of epoch secrets (5.5, 5.6, 6.4 to 6.6) ---
+
+NAME_128 = "é" * 64                  # 128 bytes of UTF-8 in 64 characters: the limit counts bytes
+LONG_NAME = NAME_128 + "s"           # 129 bytes in 65 characters
+STRANGER = rnd("stranger/account", 16)   # an account ID that belongs to no member
+P3 = T0 + 3 * DAY                    # when test pauses start, after everything in the main log
+
+
+def rename(name: bytes) -> bytes:
+    """SET_CIRCLE_NAME with arbitrary bytes for the name."""
+    return u8(lg.SET_CIRCLE_NAME) + vec16(name)
+
+
+def grant(tag, start, end, kind=1):
+    """GRANT_PAUSE for Maya, with the pause ID derived from `tag`."""
+    return lg.enc_policy(lg.GRANT_PAUSE, M.acc, pause_id=rnd(tag, 8), kind=kind, start=start, end=end)
+
+
+def add_sam(desc, terms):
+    """Jordan adds Sam with terms that break a rule of 6.5: Sam joins as an adult and the entry is flagged."""
+    return lambda b: add_member(b, jp, sp, rnd("invite/sam", 16), 0, terms, desc, reason="bad_details")
+
+
+def add_adults(b, n, tag, admin=0):
+    """n more adult members with one phone each, added by Jordan to set a case up; returns their account IDs."""
+    accs = []
+    for i in range(n):
+        p = Person(f"{tag}{i}", [("phone", 1)])
+        add_member(b, jp, p.dev["phone"], rnd(f"invite/{tag}{i}", 16), admin, ADULT_TERMS,
+                   f"Jordan adds {p.name}, an adult{' admin' if admin else ''}", quiet=True)
+        accs.append(p.acc)
+    return accs
+
+
+def bad_rekey(b, desc, recipients, reverse=False):
+    """A REKEY by Jordan's phone whose wraps go to `recipients`, (device, encryption public key) pairs."""
+    new_epoch = b.state.epoch + 1
+    secret = rnd(f"circle/epoch/{new_epoch}/bad-wraps")
+    hdr, f = b.head(lg.REKEY, jp)
+    info = lambda rid, kid: lg.epoch_wrap_info(f["circle_id"], f["seq"], f["prev_hash"], new_epoch, rid, kid)
+    wraps = idn.make_wraps([(d.id, pub) for d, pub in recipients], info, secret,
+                           lambda rid: rnd(f"log/{f['seq']}/bad-wrap/{rid.hex()}"))
+    if reverse:
+        wraps = b"".join(reversed([wraps[i:i + idn.WRAP_LEN] for i in range(0, len(wraps), idn.WRAP_LEN)]))
+    raw = lg.build_entry(jp.dsk, hdr, lg.epoch_commit(new_epoch, secret) + vec32(wraps))
+    b.commit(desc, jp, raw, "fatal", "bad_wraps")
+
+
+def c_recovery_ninth_device(b):
+    for i in range(2, lg.MAX_DEVICES + 1):
+        add_device(b, jp, Device(J, f"phone{i}", 1), f"Jordan adds device {i} of 8", quiet=True)
+    simple(b, lg.ADD_RECOVERY, jp, jr.cert, "a recovery device as the ninth: an account holds at most 8 devices, its "
+           "recovery device among them", "fatal", "too_many_devices")
+
+
+def c_shared_identity_key(b):
+    twin = Person("twin", [("phone", 1)])
+    twin.chain += idn.make_identity_link(twin.acc, twin.ik, J.ik)   # a new account rotated to Jordan's key
+    twin.iks.append(J.ik)
+    twin.dev["phone"].recert()
+    add_member(b, jp, twin.dev["phone"], rnd("invite/twin", 16), 0, ADULT_TERMS,
+               "a new account whose identity chain ends at Jordan's identity key", "fatal", "already_member")
+
+
+def c_genesis_long_name(b):
+    raw, pt = genesis_entry(b, jp, jp.cert, jp.bundles[0], jp.dsk, name=LONG_NAME)
+    b.commit("GENESIS whose name is 129 bytes in 65 characters: accepted with no name, and flagged", jp, raw,
+             "accepted", "bad_details", details_pt=pt)
+
+
+def c_genesis_wrong_secret(b):
+    b.wrong = {0: rnd("circle/epoch/0/wrong")}
+    raw, pt = genesis_entry(b, jp, jp.cert, jp.bundles[0], jp.dsk)
+    b.commit("GENESIS, read by a device whose epoch-0 secret doesn't match the entry's commitment: it discards the "
+             "secret, applies only the public effects, and its private state is unknown from here", jp, raw,
+             "deferred", details_pt=pt)
+
+
+def c_wrong_secret(b):
+    b.wrong = {3: rnd("circle/epoch/3/wrong")}
+    epoch_entry(b, lg.REKEY, jp, "Jordan rekeys (epoch 3); the secret this device holds for epoch 3 doesn't match "
+                "the entry's commitment", None, [jp, ap, mp])
+    policy(b, jp, "Jordan changes Maya's rules in epoch 3; this device discards its secret, so it is as if it had "
+                  "none: its private state freezes",
+           lg.enc_policy(lg.SET_RULES, M.acc, rules={**RULES, "history_days": 7}), expect="deferred")
+    assert lg.state_json(b.state)["state_hash"] is None
+
+
+def c_add_teen_until_now(b):
+    now = b.clock + 10 * MIN                     # the next entry's created_at (LogBuilder.head)
+    add_member(b, jp, sp, rnd("invite/sam", 16), 0, teen_terms([J.acc], teen_until=now),
+               "Sam is added as a teen whose teen_until is the entry's own created_at, not after it: added as an "
+               "adult and flagged", reason="bad_details")
+
+
+def c_add_teen_until_next_ms(b):
+    now = b.clock + 10 * MIN                     # the next entry's created_at (LogBuilder.head)
+    add_member(b, jp, sp, rnd("invite/sam", 16), 0, teen_terms([J.acc], teen_until=now + 1),
+               "Sam is added as a teen whose teen_until is 1 ms after the entry's created_at")
+    assert member(b, S)["role"] == "teen"
+
+
+def c_add_nine_adult_guardians(b):
+    extra = add_adults(b, 7, "adult")
+    kim = Person("kim", [("phone", 1)])
+    add_member(b, jp, kim.dev["phone"], rnd("invite/kim", 16), 0, teen_terms([J.acc, A.acc] + extra[:6]),
+               "Jordan adds Kim as a teen with eight adult guardians: the limit", quiet=True)
+    add_member(b, jp, sp, rnd("invite/sam", 16), 0, teen_terms([J.acc, A.acc] + extra),
+               "Sam is added as a teen with nine adult guardians: added as an adult and flagged", reason="bad_details")
+    assert member(b, kim)["role"] == "teen" and member(b, S)["role"] == "adult"
+
+
+def c_nine_guardians(b):
+    extra = add_adults(b, 7, "adult")
+    policy(b, jp, "Jordan names eight adult members as Maya's guardians: the limit",
+           lg.enc_policy(lg.SET_GUARDIANS, M.acc, guardians=sorted([J.acc, A.acc] + extra[:6])), quiet=True)
+    policy(b, jp, "and then nine", lg.enc_policy(lg.SET_GUARDIANS, M.acc, guardians=sorted([J.acc, A.acc] + extra)),
+           expect="rejected", reason="bad_guardians")
+    assert len(maya(b)["guardians"]) == 8
+
+
+def c_pause_id_reused(b):
+    policy(b, jp, "Jordan grants Maya a pause", grant("pause/twice", P3, P3 + HOUR), quiet=True)
+    policy(b, jp, "Jordan grants another pause under the same ID", grant("pause/twice", P3 + 2 * HOUR, P3 + 3 * HOUR),
+           expect="rejected", reason="bad_pause")
+
+
+def c_revoke_one(b):
+    policy(b, jp, "Jordan grants Maya a pause", grant("pause/keep/1", P3, P3 + HOUR), quiet=True)
+    policy(b, jp, "and a second one", grant("pause/keep/2", P3 + 2 * HOUR, P3 + 3 * HOUR), quiet=True)
+    policy(b, jp, "Jordan revokes the first; the second stays",
+           lg.enc_policy(lg.REVOKE_PAUSE, M.acc, pause_id=rnd("pause/keep/1", 8)))
+    assert [p["id"] for p in maya(b)["pauses"]] == [rnd("pause/keep/2", 8).hex()]
+
+
+def c_repair_first_eight(b):
+    extra = add_adults(b, 9, "admin", admin=1)
+    pending_removal(b, lg.REMOVE_MEMBER, jp, "Jordan, Maya's only guardian, leaves; of the nine adult admins left, "
+                    "the first eight by account ID become her guardians", J.acc)
+    assert maya(b)["guardians"] == [a.hex() for a in sorted(extra)[:8]]
+
+
+def c_repair_first_eight_adults(b):
+    simple(b, lg.SET_ADMIN, jp, M.acc + u8(1), "Jordan makes Maya an admin", quiet=True)
+    extra = add_adults(b, 9, "adult")
+    pending_removal(b, lg.REMOVE_MEMBER, jp, "Jordan leaves; no adult admin remains, so the first eight of the ten "
+                    "adults by account ID become Maya's guardians", J.acc)
+    assert maya(b)["guardians"] == [a.hex() for a in sorted([A.acc] + extra)[:8]]
+
+
 EMPTY_CASES = [
     ("fatal_first_not_genesis", "a log that doesn't start with GENESIS", c_first_not_genesis),
     ("fatal_genesis_bad_author", "GENESIS author is not the founder device", c_genesis_author),
@@ -890,6 +1058,9 @@ EMPTY_CASES = [
     ("fatal_genesis_by_home_assistant", "a Home Assistant device can't found a circle", c_genesis_kind(jh)),
     ("fatal_genesis_by_recovery", "a recovery device can't found a circle", c_genesis_kind(jr)),
     ("fatal_genesis_unknown_kind", "a device kind outside the registry may write nothing", c_genesis_unknown_kind),
+    ("accepted_genesis_name_too_long", "GENESIS with a 129-byte name", c_genesis_long_name),
+    ("deferred_genesis_wrong_secret", "an epoch-0 secret that doesn't match the commitment counts as missing",
+     c_genesis_wrong_secret),
 ]
 CASES = [
     ("fatal_device_active_member", "new member's device is already active", c_device_active_member),
@@ -962,8 +1133,8 @@ CASES = [
      rj(lg.enc_policy(lg.SET_RULES, M.acc, rules={**RULES, "pause_mode": 2, "schedule": []}), mp, "not_guardian",
         "Maya changes her own rules")),
     ("rejected_bad_pause", "pause longer than 24 hours",
-     rj(lg.enc_policy(lg.GRANT_PAUSE, M.acc, pause_id=rnd("pause/long", 8), kind=1, start=T0, end=T0 + 25 * HOUR),
-        jp, "bad_pause", "Jordan grants a 25-hour pause")),
+     rj(lg.enc_policy(lg.GRANT_PAUSE, M.acc, pause_id=rnd("pause/long", 8), kind=1, start=T0, end=T0 + DAY + 1),
+        jp, "bad_pause", "Jordan grants a pause 1 ms longer than 24 hours")),
     ("rejected_bad_guardians_empty", "empty guardian list",
      rj(lg.enc_policy(lg.SET_GUARDIANS, M.acc, guardians=[]), jp, "bad_guardians", "Jordan removes every guardian")),
     ("rejected_bad_guardians_teen", "a teen as guardian",
@@ -987,7 +1158,7 @@ CASES = [
         "Jordan revokes an unknown pause")),
     ("rejected_bad_rules", "history_days 0", bad_rules("Jordan sets history to 0 days", history_days=0)),
     ("rejected_bad_rules_silence", "a silence alert under 15 minutes",
-     bad_rules("Jordan sets the silence alert to 10 minutes", silence_alert_min=10)),
+     bad_rules("Jordan sets the silence alert to 14 minutes", silence_alert_min=14)),
     ("rejected_bad_rules_no_time_zone", "a schedule with no time zone",
      bad_rules("Jordan sets a schedule but no time zone", tz="")),
     ("rejected_bad_rules_time_zone_characters", "a time zone with a byte outside the allowed set",
@@ -1009,7 +1180,8 @@ CASES = [
     ("accepted_guardian_repair_no_adults", "no adult remains; teen settings end", c_repair_none),
     ("accepted_guardian_repair_two_teens", "repair judges every teen against the same snapshot", c_repair_two_teens),
     ("accepted_guardian_repair_admin_only", "repair prefers adult admins over other adults", c_repair_admin_only),
-    ("accepted_pause_cap", "at most 16 stored pauses", c_pause_cap),
+    ("accepted_pause_cap", "at most 16 stored pauses: the one that ends first goes, whatever its ID or age",
+     c_pause_cap),
     ("fatal_rekey_not_admin", "only admins start epochs", c_rekey_not_admin),
     ("fatal_pending_removal_with_commit", "a removal that starts no epoch carries no commitment", c_pending_with_commit),
     ("accepted_removal_clears_pending", "a removal that starts an epoch clears the pending flag",
@@ -1027,6 +1199,117 @@ CASES = [
     ("accepted_add_member_unsorted_guardians", "member details that don't parse", c_add_unsorted),
     ("accepted_add_member_nine_guardians", "member details with too many guardians", c_add_nine_guardians),
     ("deferred_missing_secret", "a device without the epoch secret defers private rules", c_deferred),
+    # public rules (6.4)
+    ("fatal_recovery_ninth_device", "a recovery device counts toward the 8", c_recovery_ninth_device),
+    ("fatal_already_member_identity_key", "a new account that shares a member's identity key", c_shared_identity_key),
+    # wrap coverage (6.4)
+    ("fatal_bad_wraps_order", "wraps for the right devices, out of order",
+     lambda b: bad_rekey(b, "REKEY with a wrap for every receiving device, in descending device-ID order",
+                         [(d, d.dek_pub) for d in (jp, ap, mp)], reverse=True)),
+    ("fatal_bad_wraps_extra", "a wrap for a device outside the set",
+     lambda b: bad_rekey(b, "REKEY with a wrap for every receiving device and one for the removed tablet",
+                         [(d, d.dek_pub) for d in (jp, ap, mp, jt)])),
+    ("fatal_bad_wraps_old_key", "a wrap to a key its device has replaced",
+     lambda b: bad_rekey(b, "REKEY that wraps Maya's copy to the key her phone replaced",
+                         [(jp, jp.dek_pub), (ap, ap.dek_pub), (mp, mp.deks[0][1])])),
+    # epoch secrets (5.6, 6.5)
+    ("deferred_wrong_secret", "a secret that doesn't match its commitment counts as missing", c_wrong_secret),
+    # circle names (5.5, 6.5)
+    ("rejected_circle_name_empty", "a circle name of 0 bytes",
+     rj(rename(b""), jp, "bad_details", "Jordan renames the circle to an empty name")),
+    ("rejected_circle_name_too_long", "a circle name of 129 bytes",
+     rj(rename(LONG_NAME.encode()), jp, "bad_details", "a name of 129 bytes in 65 characters: the limit counts bytes")),
+    ("accepted_circle_name_one_byte", "a circle name of 1 byte",
+     lambda b: policy(b, jp, "Jordan renames the circle to a one-byte name", rename(b"R"))),
+    ("accepted_circle_name_128_bytes", "a circle name at the limit",
+     lambda b: policy(b, jp, "Jordan renames the circle to a name of 128 bytes in 64 characters",
+                      rename(NAME_128.encode()))),
+    ("rejected_circle_name_not_utf8", "a circle name that isn't UTF-8",
+     rj(rename(b"Rivera \xff"), jp, "bad_details", "a name holding the byte 0xFF")),
+    ("rejected_circle_name_surrogate", "a circle name holding an encoded surrogate, which UTF-8 excludes",
+     rj(rename(b"Rivera \xed\xa0\x80"), jp, "bad_details",
+        "a name holding ED A0 80, the bytes of the surrogate U+D800")),
+    # rules (5.5): each field one past its limit, then every field at its limits
+    ("rejected_bad_rules_pause_mode", "pause_mode 3", bad_rules("Jordan sets pause_mode 3", pause_mode=3)),
+    ("rejected_bad_rules_approx_mode", "approx_mode 3", bad_rules("Jordan sets approx_mode 3", approx_mode=3)),
+    ("rejected_bad_rules_speed", "a speed alert over 300 km/h",
+     bad_rules("Jordan sets the speed alert to 301 km/h", speed_alert_kmh=301)),
+    ("rejected_bad_rules_phone_use", "phone_use_alerts 2",
+     bad_rules("Jordan sets phone_use_alerts to 2", phone_use_alerts=2)),
+    ("rejected_bad_rules_history_long", "history_days 31",
+     bad_rules("Jordan sets history to 31 days", history_days=31)),
+    ("rejected_bad_rules_silence_long", "a silence alert over 1440 minutes",
+     bad_rules("Jordan sets the silence alert to 1441 minutes", silence_alert_min=1441)),
+    ("rejected_bad_rules_windows_33", "33 schedule windows (limit 32)",
+     bad_rules("Jordan sets 33 schedule windows", schedule=[win(i * 40, i * 40 + 30) for i in range(33)])),
+    ("rejected_bad_rules_window_kind_0", "a window of kind 0",
+     bad_rules("a schedule window of kind 0", schedule=[win(930, 1020, kind=0)])),
+    ("rejected_bad_rules_window_kind_3", "a window of kind 3",
+     bad_rules("a schedule window of kind 3", schedule=[win(930, 1020, kind=3)])),
+    ("rejected_bad_rules_window_no_days", "a window on no day of the week",
+     bad_rules("a schedule window with days 0", schedule=[win(930, 1020, days=0)])),
+    ("rejected_bad_rules_window_days_128", "a window whose days set bit 7",
+     bad_rules("a schedule window with days 128: bit 7 names no day", schedule=[win(930, 1020, days=128)])),
+    ("rejected_bad_rules_empty_window", "a window that ends when it starts",
+     bad_rules("a schedule window from 15:30 to 15:30", schedule=[win(930, 930)])),
+    ("rejected_bad_rules_window_across_midnight", "a window crossing midnight, which must be two windows",
+     bad_rules("a schedule window from 22:00 to 07:00", schedule=[win(1320, 420)])),
+    ("rejected_bad_rules_window_past_midnight", "a window that ends after minute 1440",
+     bad_rules("a schedule window from 22:00 to minute 1441", schedule=[win(1320, 1441)])),
+    ("accepted_rules_upper_limits", "every field of Rules at its largest valid value",
+     lambda b: policy(b, jp, "Jordan sets rules with every field at its upper limit, with a 64-byte time zone and 32 "
+                             "windows, the last ending at minute 1440",
+                      lg.enc_policy(lg.SET_RULES, M.acc, rules=UPPER_RULES))),
+    ("accepted_rules_lower_limits", "every field of Rules at its smallest valid value",
+     lambda b: policy(b, jp, "Jordan sets rules with every field at its lower limit, with a one-minute window on "
+                             "Mondays", lg.enc_policy(lg.SET_RULES, M.acc, rules=LOWER_RULES))),
+    # pauses (6.5)
+    ("rejected_bad_pause_kind_0", "a pause of kind 0",
+     rj(grant("pause/kind0", P3, P3 + HOUR, kind=0), jp, "bad_pause", "Jordan grants a pause of kind 0")),
+    ("rejected_bad_pause_kind_3", "a pause of kind 3",
+     rj(grant("pause/kind3", P3, P3 + HOUR, kind=3), jp, "bad_pause", "Jordan grants a pause of kind 3")),
+    ("rejected_bad_pause_empty", "a pause that ends when it starts",
+     rj(grant("pause/empty", P3, P3), jp, "bad_pause", "Jordan grants a pause whose end is its start")),
+    ("accepted_pause_one_ms", "a pause of 1 ms",
+     lambda b: policy(b, jp, "Jordan grants a pause that ends 1 ms after it starts", grant("pause/ms", P3, P3 + 1))),
+    ("accepted_pause_24_hours", "a pause of exactly 24 hours",
+     lambda b: policy(b, jp, "Jordan grants a pause of exactly 24 hours", grant("pause/day", P3, P3 + DAY))),
+    ("rejected_bad_pause_id_reused", "a pause ID that is already stored", c_pause_id_reused),
+    ("accepted_revoke_pause_keeps_others", "revoking one pause leaves the others", c_revoke_one),
+    # guardians (6.4 to 6.6)
+    ("rejected_bad_guardians_not_member", "a guardian from outside the circle",
+     rj(lg.enc_policy(lg.SET_GUARDIANS, M.acc, guardians=sorted([J.acc, STRANGER])), jp, "bad_guardians",
+        "Jordan names himself and an account outside the circle")),
+    ("rejected_bad_guardians_nine_adults", "eight adult members as guardians, then nine", c_nine_guardians),
+    ("accepted_add_member_teen_guardian", "a teen among a new teen's guardians",
+     add_sam("Sam is added as a teen with Jordan and Maya, herself a teen, as guardians: added as an adult and flagged",
+             teen_terms([J.acc, M.acc]))),
+    ("accepted_add_member_own_guardian", "a new teen as one of their own guardians",
+     add_sam("Sam is added as a teen with Jordan and himself as guardians; the new member doesn't count: added as an "
+             "adult and flagged", teen_terms([J.acc, S.acc]))),
+    ("accepted_add_member_guardian_not_member", "a guardian from outside the circle",
+     add_sam("Sam is added as a teen with Jordan and an account outside the circle as guardians: added as an adult "
+             "and flagged", teen_terms([J.acc, STRANGER]))),
+    ("accepted_add_member_teen_no_guardians", "a teen with no guardians",
+     add_sam("Sam is added as a teen with no guardians: added as an adult and flagged", teen_terms([]))),
+    ("accepted_add_member_nine_adult_guardians", "a new teen with eight adult guardians, then one with nine",
+     c_add_nine_adult_guardians),
+    ("accepted_add_member_teen_until_now", "teen_until that isn't after created_at", c_add_teen_until_now),
+    ("accepted_add_member_teen_until_next_ms", "teen_until 1 ms after created_at", c_add_teen_until_next_ms),
+    ("accepted_add_member_teen_bad_rules", "a teen with invalid rules",
+     add_sam("Sam is added as a teen whose rules keep 0 days of history: added as an adult and flagged",
+             teen_terms([J.acc], rules={**RULES, "history_days": 0}))),
+    ("accepted_add_member_adult_teen_until", "an adult with a teen_until",
+     add_sam("Sam is added as an adult whose terms carry a teen_until: flagged",
+             lg.enc_terms(lg.ADULT, TEEN_UNTIL, [], lg.DEFAULT_RULES))),
+    ("accepted_add_member_adult_guardians", "an adult with a guardian",
+     add_sam("Sam is added as an adult whose terms name a guardian: flagged",
+             lg.enc_terms(lg.ADULT, 0, [J.acc], lg.DEFAULT_RULES))),
+    ("accepted_add_member_adult_bad_rules", "an adult whose rules, though ignored, are invalid",
+     add_sam("Sam is added as an adult whose terms carry rules with 0 days of history: flagged",
+             lg.enc_terms(lg.ADULT, 0, [], {**lg.DEFAULT_RULES, "history_days": 0}))),
+    ("accepted_guardian_repair_first_eight", "repair names at most eight admins", c_repair_first_eight),
+    ("accepted_guardian_repair_first_eight_adults", "repair names at most eight adults", c_repair_first_eight_adults),
 ]
 for name, desc, fn in EMPTY_CASES:
     case(name, desc, fn, base="empty")

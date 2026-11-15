@@ -49,12 +49,13 @@ class LogTest {
     @Test
     fun cases() = sync {
         val cases = v.list("cases")
-        assertEquals(154, cases.size)
+        assertEquals(206, cases.size)
         var checked = 0
         for (c in cases) {
             val keys = secrets.toMutableMap()
             c.getAsJsonObject("new_epoch_secrets")?.entrySet()?.forEach { keys[it.key.toLong()] = hexBytes(it.value.asString) }
             c.getAsJsonArray("withheld_epochs")?.forEach { keys.remove(it.asLong) }
+            c.getAsJsonObject("wrong_epoch_secrets")?.entrySet()?.forEach { keys[it.key.toLong()] = hexBytes(it.value.asString) }
             val base = c.int("base_seq")
             var client = replay(base, secrets)
             var server = replay(base, null)
@@ -65,7 +66,7 @@ class LogTest {
                 checked++
             }
         }
-        assertEquals(229, checked)
+        assertEquals(327, checked)
     }
 
     @Test
