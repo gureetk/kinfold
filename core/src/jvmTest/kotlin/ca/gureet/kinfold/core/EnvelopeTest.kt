@@ -21,7 +21,6 @@ import ca.gureet.kinfold.core.wire.Bytes
 import ca.gureet.kinfold.core.wire.Padding
 import ca.gureet.kinfold.core.wire.hexBytes
 import ca.gureet.kinfold.core.wire.toHex
-import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -58,7 +57,7 @@ class EnvelopeTest {
             val name = t.str("name")
             val state = stateAt(t.int("log_seq"))
             val raw = t.hex("raw")
-            val want = json(t.getAsJsonObject("payload"))
+            val want = objOf(t.getAsJsonObject("payload"))
             for (r in t.list("recipients")) {
                 val got = open(raw, state, r.hex("device_id"), r.getAsJsonObject("keys"))
                 assertIs<Receipt.Accepted>(got, "$name -> ${r.str("device")}: ${(got as? Receipt.Refused)?.reason}")
@@ -95,7 +94,7 @@ class EnvelopeTest {
             assertEquals(t.str("server_error"), Envelopes.serverRefusal(p, raw, state, now)?.code, "$name (server)")
             val got = open(raw, state, t.hex("receiver_device_id"), t.getAsJsonObject("receiver_keys"))
             assertIs<Receipt.Accepted>(got, "$name: the receiver opens it")
-            assertEquals(json(t.getAsJsonObject("payload")), got.payload, name)
+            assertEquals(objOf(t.getAsJsonObject("payload")), got.payload, name)
         }
     }
 
@@ -135,7 +134,7 @@ class EnvelopeTest {
         for (name in listOf("f1", "f5", "f6", "f7", "f10")) {
             val got = openFrozen(name)
             assertIs<Receipt.Accepted>(got, "opened while frozen: $name")
-            assertEquals(json(byName.getValue(name).getAsJsonObject("payload")), got.payload, name)
+            assertEquals(objOf(byName.getValue(name).getAsJsonObject("payload")), got.payload, name)
         }
         assertEquals(Reason.NOT_ALLOWED, (openFrozen("not_allowed_web_sends_location") as? Receipt.Refused)?.reason)
     }
@@ -167,7 +166,7 @@ class EnvelopeTest {
             for (r in t.list("recipients")) {
                 val got = open(raw, state, r.hex("device_id"), r.getAsJsonObject("keys"))
                 assertIs<Receipt.Accepted>(got, "$name -> ${r.str("device")}: ${(got as? Receipt.Refused)?.reason}")
-                assertEquals(json(t.getAsJsonObject("payload")), got.payload, name)
+                assertEquals(objOf(t.getAsJsonObject("payload")), got.payload, name)
             }
             assertNull(Envelopes.serverRefusal(p, raw, state, now), "$name: a server stores it")
         }
@@ -195,7 +194,7 @@ class EnvelopeTest {
         val byName = e.list("valid").associateBy { it.str("name") }
         for (name in listOf("f4", "f5")) {
             val t = byName.getValue(name)
-            val payload = json(t.getAsJsonObject("payload"))
+            val payload = objOf(t.getAsJsonObject("payload"))
             val got = EpochSecrets.from(p, stateAt(t.int("log_seq")), payload)
             assertIs<EpochSecrets.Received.Secrets>(got, name)
             assertEquals(secrets.mapValues { it.value.toHex() }, got.byEpoch.mapValues { it.value.toHex() }, name)
@@ -229,15 +228,4 @@ class EnvelopeTest {
     private suspend fun stateAt(seq: Int): CircleState =
         states.getOrPut(seq) { MemberLog.replay(p, entries.take(seq + 1).map { it.hex("raw") }, secrets).first }
 
-    /** A vector's JSON as a [Json] value; every number in a payload is a whole number. */
-    private fun json(v: JsonElement): Json = when {
-        v.isJsonObject -> Json.Obj(v.asJsonObject.entrySet().associate { it.key to json(it.value) })
-        v.isJsonArray -> Json.Arr(v.asJsonArray.map { json(it) })
-        v.isJsonNull -> Json.Null
-        v.asJsonPrimitive.isBoolean -> Json.Bool(v.asBoolean)
-        v.asJsonPrimitive.isNumber -> Json.Num(v.asLong)
-        else -> Json.Str(v.asString)
-    }
-
-    private fun json(v: JsonObject): Json.Obj = json(v as JsonElement) as Json.Obj
 }

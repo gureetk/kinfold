@@ -36,6 +36,23 @@ sealed class Json {
     /** [write] as UTF-8 bytes: what a sender pads and encrypts. */
     fun encode(): ByteArray = write().encodeToByteArray()
 
+    /**
+     * The limits a parse applies as it reads: nesting depth, UTF-8 bytes in a string (and in a
+     * top-level `avatar`), and items in an array.
+     */
+    data class Limits(val maxDepth: Int, val maxString: Int, val maxAvatar: Int, val maxArray: Int) {
+        companion object {
+            /** §8.1, for payloads. */
+            val PAYLOAD = Limits(MAX_DEPTH, MAX_STRING, MAX_AVATAR, MAX_ARRAY)
+
+            /**
+             * For JSON that isn't a payload, such as a link response (§10.3): the payload limits,
+             * except that arrays may be of any length, since a circle may have more than 256 epochs.
+             */
+            val MESSAGE = Limits(MAX_DEPTH, MAX_STRING, MAX_STRING, Int.MAX_VALUE)
+        }
+    }
+
     companion object {
         /** Objects and arrays nest at most this deep; the payload object itself is level 1. */
         const val MAX_DEPTH = 8
@@ -59,18 +76,23 @@ sealed class Json {
          * A payload that repeats a key within an object is refused, which §8.1 allows. That way
          * no two readers of one payload can disagree about which value counts.
          */
-        fun parsePayload(bytes: ByteArray): Obj? {
+        fun parsePayload(bytes: ByteArray): Obj? = parseObject(bytes, Limits.PAYLOAD)?.takeIf { it["t"] is Str }
+
+        /**
+         * [bytes] as UTF-8 JSON whose top level is an object, within [limits]; null for anything
+         * else. A key repeated within an object is refused here too.
+         */
+        fun parseObject(bytes: ByteArray, limits: Limits): Obj? {
             val text = try {
                 bytes.decodeToString(throwOnInvalidSequence = true)
             } catch (_: CharacterCodingException) {
                 return null
             }
-            val obj = try {
-                Parser(text).document()
+            return try {
+                Parser(text, limits).document()
             } catch (_: NotAPayload) {
-                return null
+                null
             }
-            return obj.takeIf { it["t"] is Str }
         }
 
         private fun writeTo(out: StringBuilder, v: Json) {
@@ -131,10 +153,10 @@ sealed class Json {
 private class NotAPayload : Exception()
 
 /**
- * RFC 8259 JSON with the limits of §8.1 checked as the text is read, so that nothing too deep or
- * too large is ever built. The input is already valid UTF-8, decoded.
+ * RFC 8259 JSON with [limits] (those of §8.1, for a payload) checked as the text is read, so that
+ * nothing too deep or too large is ever built. The input is already valid UTF-8, decoded.
  */
-private class Parser(private val s: String) {
+private class Parser(private val s: String, private val limits: Json.Limits) {
     private var i = 0
 
     fun document(): Json.Obj {
@@ -160,7 +182,7 @@ private class Parser(private val s: String) {
     }
 
     private fun obj(depth: Int): Json.Obj {
-        if (depth > Json.MAX_DEPTH) refuse()
+        if (depth > limits.maxDepth) refuse()
         i++
         val fields = LinkedHashMap<String, Json>()
         ws()
@@ -171,12 +193,12 @@ private class Parser(private val s: String) {
         while (true) {
             ws()
             if (peek() != '"') refuse()
-            val key = string(Json.MAX_STRING)
+            val key = string(limits.maxString)
             if (key in fields) refuse()
             ws()
             if (next() != ':') refuse()
             // The one exception to the string limit: the payload's own `avatar` field.
-            fields[key] = value(depth + 1, if (depth == 1 && key == "avatar") Json.MAX_AVATAR else Json.MAX_STRING)
+            fields[key] = value(depth + 1, if (depth == 1 && key == "avatar") limits.maxAvatar else limits.maxString)
             ws()
             when (next()) {
                 ',' -> continue
@@ -187,7 +209,7 @@ private class Parser(private val s: String) {
     }
 
     private fun arr(depth: Int): Json.Arr {
-        if (depth > Json.MAX_DEPTH) refuse()
+        if (depth > limits.maxDepth) refuse()
         i++
         val items = ArrayList<Json>()
         ws()
@@ -196,8 +218,8 @@ private class Parser(private val s: String) {
             return Json.Arr(items)
         }
         while (true) {
-            if (items.size == Json.MAX_ARRAY) refuse()
-            items.add(value(depth + 1, Json.MAX_STRING))
+            if (items.size == limits.maxArray) refuse()
+            items.add(value(depth + 1, limits.maxString))
             ws()
             when (next()) {
                 ',' -> continue
