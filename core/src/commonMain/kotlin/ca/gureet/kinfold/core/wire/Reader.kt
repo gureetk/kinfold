@@ -52,6 +52,13 @@ class Reader(private val data: ByteArray) {
 
     fun vec16(): ByteArray = bytes(u16())
 
+    /** A `vec16` holding strict UTF-8 text; anything else is `malformed`. */
+    fun utf8(): String = try {
+        vec16().decodeToString(throwOnInvalidSequence = true)
+    } catch (_: CharacterCodingException) {
+        malformed()
+    }
+
     fun vec32(): ByteArray {
         val n = u32()
         if (n > remaining) malformed()
