@@ -21,7 +21,7 @@ class TinkHpkeTest {
     /**
      * The RFC's messages carry `aad`, which the protocol never uses and Tink's public API
      * doesn't take, so they are opened through Tink's own HPKE context: the code that
-     * `JvmCrypto`'s seals and opens run on.
+     * `TinkCrypto`'s seals and opens run on.
      */
     @Test
     fun rfcMessages() {

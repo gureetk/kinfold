@@ -31,10 +31,14 @@ jobs:
           unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/gradle-9.9.1/bin" >> "$GITHUB_PATH"
 
+      - name: Android platform 36 and build tools 36.0.0
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-36" "build-tools;36.0.0" > /dev/null
+
       # Every artifact is checked against gradle/verification-metadata.xml. Maven Central
       # sometimes answers 429, so a failed download is tried again after a pause; a hash
       # that doesn't match fails at once.
-      - name: The vectors on the JVM
+      - name: The vectors on the JVM, and on Android's host tests
         working-directory: core
         run: |
           log="$RUNNER_TEMP/gradle.log"
@@ -48,3 +52,77 @@ jobs:
             sleep $((attempt * 30))
           done
           exit 1
+
+  # The same tests on Android itself, in an emulator running stock Android (no Google
+  # services): the oldest version the core supports and the newest.
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [26, 36]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Gradle 9.9.1, checked against its published SHA-256
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/gradle.zip" https://services.gradle.org/distributions/gradle-9.9.1-bin.zip
+          echo "d8a18a7a841dd5df825d35a685fad6f2d7f12ac0c280e57b67c27b4a520ba228  $RUNNER_TEMP/gradle.zip" | sha256sum -c
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-9.9.1/bin" >> "$GITHUB_PATH"
+
+      - name: KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # sdkmanager checks each package against the checksum in Google's repository index.
+      - name: Android ${{ matrix.api }} emulator
+        env:
+          API: ${{ matrix.api }}
+        run: |
+          sdk="$ANDROID_HOME/cmdline-tools/latest/bin"
+          "$sdk/sdkmanager" --install "platforms;android-36" "build-tools;36.0.0" "platform-tools" "emulator" "system-images;android-$API;default;x86_64" > /dev/null
+          echo no | "$sdk/avdmanager" create avd --force -n kinfold -k "system-images;android-$API;default;x86_64"
+          "$ANDROID_HOME/emulator/emulator" -avd kinfold -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          "$ANDROID_HOME/platform-tools/adb" wait-for-device
+          for i in $(seq 1 90); do
+            [ "$("$ANDROID_HOME/platform-tools/adb" shell getprop sys.boot_completed | tr -d '\r')" = 1 ] && exit 0
+            sleep 5
+          done
+          cat "$RUNNER_TEMP/emulator.log"
+          exit 1
+
+      - name: The vectors on Android ${{ matrix.api }}
+        working-directory: core
+        run: |
+          log="$RUNNER_TEMP/gradle.log"
+          for attempt in 1 2 3 4; do
+            if gradle --no-daemon --console=plain connectedAndroidDeviceTest > "$log" 2>&1; then
+              cat "$log"
+              break
+            fi
+            cat "$log"
+            if grep -q -E "Dependency verification failed|There were failing tests|Compilation error|Kotlin compiler|tests on .* failed" "$log"; then exit 1; fi
+            [ "$attempt" = 4 ] && exit 1
+            sleep $((attempt * 30))
+          done
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          tests = failed = 0
+          for f in glob.glob("build/outputs/androidTest-results/connected/**/*.xml", recursive=True):
+              t = ET.parse(f).getroot()
+              tests += int(t.get("tests", 0))
+              failed += int(t.get("failures", 0)) + int(t.get("errors", 0))
+          print(f"{tests} tests on the device, {failed} failed")
+          raise SystemExit(1 if failed or not tests else 0)
+          PY
