@@ -2,7 +2,7 @@
 
 A free, self-hosted family location app: native Android and iOS apps and a small Go server, with end-to-end encryption, so the server that relays your family's locations can't read them. Built to feel familiar to people coming from Life360.
 
-> **Status: Phase 1 has begun.** The protocol spec (draft 0.3), the HTTP API draft, test vectors and three implementations that agree on them are here, along with a server that answers the API's accounts, member logs, envelopes, live stream, silence watches, invites, device linking, share links, push through the iOS relay and Web Push, map regions and address search, and keeps its data in SQLite. The shared Kotlin core has begun, with the encoding and the platform cryptography behind the spec's byte checks; the rest of it, the rest of the server and the apps don't exist yet.
+> **Status: Phase 1 has begun.** The protocol spec (draft 0.3), the HTTP API draft, test vectors and three implementations that agree on them are here, along with a server that answers the API's accounts, member logs, envelopes, live stream, silence watches, invites, device linking, share links, push through the iOS relay and Web Push, map regions and address search, and keeps its data in SQLite. The shared Kotlin core has begun: the encoding, the platform cryptography behind the spec's byte checks, identities and the member log, checked against the vectors. Its envelopes and the rest, the rest of the server and the apps don't exist yet.
 >
 > Not affiliated with other apps that use the name Kinfold.
 
