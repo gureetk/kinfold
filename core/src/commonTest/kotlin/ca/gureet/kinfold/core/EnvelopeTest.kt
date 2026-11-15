@@ -2,7 +2,6 @@
 package ca.gureet.kinfold.core
 
 import ca.gureet.kinfold.core.crypto.HpkeKey
-import ca.gureet.kinfold.core.crypto.JvmCrypto
 import ca.gureet.kinfold.core.crypto.Primitives
 import ca.gureet.kinfold.core.envelope.Envelope
 import ca.gureet.kinfold.core.envelope.EnvelopeHeader
@@ -21,7 +20,6 @@ import ca.gureet.kinfold.core.wire.Bytes
 import ca.gureet.kinfold.core.wire.Padding
 import ca.gureet.kinfold.core.wire.hexBytes
 import ca.gureet.kinfold.core.wire.toHex
-import com.google.gson.JsonObject
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -35,7 +33,7 @@ import kotlin.test.assertNull
  * device whose private state is frozen.
  */
 class EnvelopeTest {
-    private val crypto = JvmCrypto()
+    private val crypto = platformCrypto()
     private val p = Primitives(crypto)
     private val e = Vectors.group("envelopes")
     private val now = e.get("receiver_now").asLong.toULong()
@@ -121,7 +119,7 @@ class EnvelopeTest {
         val byName = (e.list("valid") + e.list("invalid")).associateBy { it.str("name") }
         suspend fun openFrozen(name: String): Receipt {
             val t = byName.getValue(name)
-            val r = t.getAsJsonArray("recipients")?.first()?.asJsonObject
+            val r = t.optArray("recipients")?.first()?.asJsonObject
             return if (r != null) {
                 open(t.hex("raw"), frozen, r.hex("device_id"), r.getAsJsonObject("keys"))
             } else {
