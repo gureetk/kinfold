@@ -93,12 +93,25 @@ jobs:
           sdk="$ANDROID_HOME/cmdline-tools/latest/bin"
           "$sdk/sdkmanager" --install "platforms;android-36" "build-tools;36.0.0" "platform-tools" "emulator" "system-images;android-$API;default;x86_64" > /dev/null
           echo no | "$sdk/avdmanager" create avd --force -n kinfold -k "system-images;android-$API;default;x86_64"
-          "$ANDROID_HOME/emulator/emulator" -avd kinfold -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect > "$RUNNER_TEMP/emulator.log" 2>&1 &
-          "$ANDROID_HOME/platform-tools/adb" wait-for-device
-          for i in $(seq 1 90); do
-            [ "$("$ANDROID_HOME/platform-tools/adb" shell getprop sys.boot_completed | tr -d '\r')" = 1 ] && exit 0
+          adb="$ANDROID_HOME/platform-tools/adb"
+          # Start adb first: it makes the key the emulator hands the device, so adb is let in.
+          "$adb" start-server
+          "$ANDROID_HOME/emulator/emulator" -avd kinfold -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel on > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          emulator=$!
+          for i in $(seq 1 120); do
+            [ $((i % 12)) = 0 ] && "$adb" devices
+            if ! kill -0 "$emulator" 2> /dev/null; then
+              echo "The emulator stopped:"
+              cat "$RUNNER_TEMP/emulator.log"
+              exit 1
+            fi
+            if [ "$(timeout 10 "$adb" shell getprop sys.boot_completed 2> /dev/null | tr -d '\r')" = 1 ]; then
+              echo "Booted after about $((i * 5)) seconds"
+              exit 0
+            fi
             sleep 5
           done
+          echo "The emulator didn't boot in 10 minutes:"
           cat "$RUNNER_TEMP/emulator.log"
           exit 1
 
