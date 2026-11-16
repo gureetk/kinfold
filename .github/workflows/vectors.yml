@@ -2,7 +2,9 @@
 name: Protocol vectors
 
 on:
+  # Branches are tested through their pull requests; pushes only on main.
   push:
+    branches: [main]
     paths: ["spec/**", "reference/**", ".github/workflows/vectors.yml"]
   pull_request:
     paths: ["spec/**", "reference/**", ".github/workflows/vectors.yml"]
