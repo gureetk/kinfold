@@ -207,6 +207,25 @@ class EnvelopeTest {
         }
     }
 
+    /** The `welcomes` vectors: what a device keeps from a `welcome` or `refresh` (§8.5). */
+    @Test
+    fun welcomes() = sync {
+        val cases = Vectors.root.getAsJsonArray("welcomes").map { it.asJsonObject }
+        assertEquals(16, cases.size)
+        for (c in cases) {
+            val name = c.str("name")
+            val payload = checkNotNull(Json.parsePayload(c.getAsJsonObject("payload").toString().encodeToByteArray())) { name }
+            val got = EpochSecrets.from(p, stateAt(c.int("log_seq")), payload)
+            if (c.has("head_unknown")) {
+                assertEquals(EpochSecrets.Received.HeadUnknown, got, name)
+                continue
+            }
+            assertIs<EpochSecrets.Received.Secrets>(got, name)
+            assertEquals(c.getAsJsonArray("keeps").map { it.asLong }, got.byEpoch.keys.sorted(), name)
+            for ((e, secret) in got.byEpoch) assertEquals(secrets.getValue(e).toHex(), secret.toHex(), "$name: epoch $e")
+        }
+    }
+
     @Test
     fun approx() {
         val cases = Vectors.root.getAsJsonArray("approx").map { it.asJsonObject }

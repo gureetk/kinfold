@@ -313,6 +313,18 @@ LIMITS = [
 for name, cond in LIMITS:
     check("limits", name, cond)
 
+# --- the secrets a device keeps from a welcome or refresh (8.5) -------------------------------------
+for c in v["welcomes"]:
+    got = ev.epoch_secrets_from(ev.parse_payload(json.dumps(c["payload"]).encode()), state_at(c["log_seq"]))
+    if c.get("head_unknown"):
+        check("welcomes", c["name"], got is None)
+    else:
+        check("welcomes", c["name"], got is not None and sorted(got) == c["keeps"]
+              and all(got[e] == secrets[e] for e in got))
+check("welcomes", "every outcome is covered", {"head_unknown"} | {len(c.get("keeps", ())) > 0 for c in v["welcomes"]}
+      == {"head_unknown", True, False})
+
+
 # --- padding, approximate positions, safety codes ------------------------------------------------------
 for t in v["padding"]["valid"]:
     p = ev.pad(hx(t["payload_byte"]) * t["payload_length"])

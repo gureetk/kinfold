@@ -789,7 +789,7 @@ A malicious server could show different members different logs — for example, 
 | `pause_req` | circle | a teen's phone or tablet | `id` (8 random bytes; becomes `pause_id`), `kind` (1 pause, 2 approximate), `start`, `end`; optional `note` |
 | `pause_deny` | circle | a guardian's phone or tablet | `id`, `teen` (account ID); optional `note` |
 | `watch_grant` | circle | the watched phone or tablet | `grant` (a WatchGrant, §14.1) |
-| `welcome` | direct | phone, tablet | To a newly added member's or device's devices: `epochs` (array of base64url epoch secrets, index = epoch), `head` (base64url entry hash) |
+| `welcome` | direct | phone, tablet | To a newly added member's or device's devices: `epochs` (array of base64url epoch secrets for consecutive epochs), `first` (the epoch of the first item; 0 when left out), `head` (base64url entry hash) |
 | `refresh_req` | circle | any receiving device | `epochs` (array of the epoch numbers the sender lacks) |
 | `refresh` | circle | phone, tablet | Same fields as `welcome`, in answer to a `refresh_req` |
 | `ik` | direct | phone, tablet | To the account's own other phones and tablets after a rotation (§6.4): `ik` (the new identity key seed) and `chain` (the identity chain, §4.3), both base64url |
@@ -852,6 +852,8 @@ Adults pause on their own: their phones simply send `hb` flagged `paused`.
 ### 8.5 Welcome and refresh
 
 After appending `ADD_MEMBER` or `ADD_DEVICE`, the author SHOULD send `welcome` to the new devices. The receiver MUST check each secret against the log's `epoch_commit` values before using it, discarding any that doesn't match (§6.5), and MUST check that the head is in the log.
+
+**Epochs past 255.** An array holds at most 256 items (§8.1), so a `welcome` or `refresh` carries a run of consecutive epochs: item *i* of `epochs` is the secret of epoch `first + i`. A sender with more secrets than one array holds sends several payloads, each with its own `first`; it sends the run that ends at the current epoch first, because a new device needs that one at once. A device that lacks more than 256 epochs names at most 256 in each `refresh_req` and asks again once those arrive. The receiver treats each item on its own: one that isn't a base64url string of 32 bytes, whose epoch has no `epoch_commit` in the log, or that doesn't match it, is dropped, and the others still count. A `first` that is present but isn't a whole number from 0 up, `epochs` that isn't an array, or a missing `head` gives no secrets at all. A `head` the device hasn't verified yet means fetching and verifying the log up to it before taking anything.
 
 A device that lacks an epoch secret — because a wrap didn't open, a welcome never arrived, or it was added with a recovery kit — sends `refresh_req` naming the epochs it lacks. Any phone or tablet that holds them answers with a `refresh` after a random delay of up to 5 seconds, unless another device's answer has reached it first. A `refresh` is a circle envelope so that the other devices see the answer and stay quiet; every active device is entitled to every epoch secret, so nothing is disclosed. A receiver takes from it only the secrets it lacks, each checked against the log as for a `welcome`.
 
@@ -1428,6 +1430,7 @@ The vectors hold:
 - a main log of 21 entries that uses every entry type but `REMOVE_MEMBER`, with the full state and the state hash after each;
 - 206 log cases, each a short continuation of the main log or a log of its own: every fatal reason code except the clock-dependent `bad_time`, every rejection, flagged and deferred entries, every entry type from a web, a Home Assistant and a recovery author, the limits (an oversized entry, a 33rd member, a 9th device, a 17th pause, a 9th chain link), both sides of the limits on rules, pauses, guardians, member terms and names, wrap coverage, epoch secrets that are missing or don't match their commitment, details padding, identity chains, recovery devices, pending rekeys, guardian repair, and times at the top of the u64 range;
 - envelopes: a valid example of every payload type, the edges of the time limits (the top of the u64 range among them) and of the payload limits (all but the avatar's, which each checker tests by hand to keep the file small), each failure of §7.6, the sender rules of §8.2, a replay, and the server's own checks (`bad_ttl`, `stale_head`, wraps that name the wrong devices, the same bytes posted twice);
+- the secrets a device keeps from a `welcome` or `refresh`: runs that start after epoch 0, items that are dropped while the rest count, `first` values that give nothing, and a head the device hasn't verified;
 - padding, approximate positions and safety codes;
 - an invite with its join request and both join results; linking in both directions and after a rotation, with requests the existing device must refuse; recovery kits; a setup code; server moves; a share link; the server's identity document, its key's fingerprint and a login;
 - watch grants, valid and not; a push of each type and pushes a device drops; a relay signature.
@@ -1514,7 +1517,7 @@ Draft 0.3 applies the design review of November 2026. Nothing from draft 0.2 can
 | State | State hash for comparing clients | 6.9 |
 | Envelopes | Recipients are receiving devices; circle envelopes must name all of them (`stale_head`, `bad_wraps`); idempotent posts; fifteen receive steps with a sender check before the signature and `not_allowed` last | 7.2, 7.5, 7.6 |
 | Padding | `PadTo` for fixed sizes | 7.4 |
-| Payloads | Size and depth limits; image and text rules; sender rules are normative; heartbeat flags; new events; places name their creator; `watch_grant`, `refresh_req`, `ik`; pause requests and refreshes go to the whole circle | 8.1, 8.2 |
+| Payloads | Size and depth limits; image and text rules; sender rules are normative; heartbeat flags; new events; places name their creator; `watch_grant`, `refresh_req`, `ik`; pause requests and refreshes go to the whole circle; `welcome` and `refresh` name their first epoch, so a circle past epoch 255 can still hand over every secret | 8.1, 8.2, 8.5 |
 | Approximate mode | No speed, heading, altitude, activity or trail; rate limit and dwell time; place alerts off unless chosen | 8.3 |
 | Time | Trusted time; guardians check pauses and silence themselves | 8.4 |
 | Stored data | Tombstones kept; stored objects outlined | 8.6, 8.7 |
