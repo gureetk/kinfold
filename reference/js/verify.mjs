@@ -668,6 +668,25 @@ checkEq('the valid envelopes carry every payload type of §8.2, a type nobody kn
     'refresh_req', 'sig', 'sos', 'test_limits', 'watch_grant', 'welcome']);
 
 // ---------------------------------------------------------------------------
+// The secrets a device keeps from a welcome or refresh (§8.5)
+// ---------------------------------------------------------------------------
+
+group('welcomes');
+for (const c of V.welcomes) {
+  await attempt(`welcome ${c.name}`, async () => {
+    const payload = K.parsePayloadJSON(utf8(JSON.stringify(c.payload)));
+    check(`${c.name}: the payload parses`, payload !== null);
+    const got = await K.epochSecretsFrom(payload, mainStates[c.log_seq].client);
+    if (c.head_unknown) {
+      check(`${c.name}: the head isn't in the log yet`, got === null);
+      return;
+    }
+    checkEq(`${c.name}: the epochs kept`, got === null ? null : [...got.keys()].sort((a, b) => a - b), c.keeps);
+    for (const [e, secret] of got ?? []) checkEq(`${c.name}: the secret of epoch ${e}`, toHex(secret), toHex(baseSecrets.get(e)));
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Padding, approx, safety codes
 // ---------------------------------------------------------------------------
 

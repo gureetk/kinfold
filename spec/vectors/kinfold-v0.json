@@ -23779,6 +23779,268 @@
    }
   ]
  },
+ "welcomes": [
+  {
+   "name": "every_epoch",
+   "description": "a welcome with every secret from epoch 0, `first` left out",
+   "log_seq": 20,
+   "payload": {
+    "t": "welcome",
+    "epochs": [
+     "PBjkyK2gk_pD3dNV-NRB4EPVZWB0cv4xNWTq__3PdxU",
+     "xJ369jP-pGy9MXSDG3k2QP1Pd-qjl3wvpJYHLTVfhsA",
+     "-7Dzxdx54Lnjg_SSJL-ac3Er0noGV4QCPhpyPKez938"
+    ],
+    "head": "jtZ90tSXCPgW5Kw40YDKDX6OyfE7YXr1OX7Guj7Czjk"
+   },
+   "keeps": [
+    0,
+    1,
+    2
+   ]
+  },
+  {
+   "name": "first_zero",
+   "description": "the same with `first` written out",
+   "log_seq": 20,
+   "payload": {
+    "t": "welcome",
+    "first": 0,
+    "epochs": [
+     "PBjkyK2gk_pD3dNV-NRB4EPVZWB0cv4xNWTq__3PdxU",
+     "xJ369jP-pGy9MXSDG3k2QP1Pd-qjl3wvpJYHLTVfhsA",
+     "-7Dzxdx54Lnjg_SSJL-ac3Er0noGV4QCPhpyPKez938"
+    ],
+    "head": "jtZ90tSXCPgW5Kw40YDKDX6OyfE7YXr1OX7Guj7Czjk"
+   },
+   "keeps": [
+    0,
+    1,
+    2
+   ]
+  },
+  {
+   "name": "later_run",
+   "description": "a refresh that starts at epoch 1",
+   "log_seq": 20,
+   "payload": {
+    "t": "refresh",
+    "first": 1,
+    "epochs": [
+     "xJ369jP-pGy9MXSDG3k2QP1Pd-qjl3wvpJYHLTVfhsA",
+     "-7Dzxdx54Lnjg_SSJL-ac3Er0noGV4QCPhpyPKez938"
+    ],
+    "head": "jtZ90tSXCPgW5Kw40YDKDX6OyfE7YXr1OX7Guj7Czjk"
+   },
+   "keeps": [
+    1,
+    2
+   ]
+  },
+  {
+   "name": "shifted",
+   "description": "every secret one place off, so none matches its commitment",
+   "log_seq": 20,
+   "payload": {
+    "t": "refresh",
+    "first": 1,
+    "epochs": [
+     "PBjkyK2gk_pD3dNV-NRB4EPVZWB0cv4xNWTq__3PdxU",
+     "xJ369jP-pGy9MXSDG3k2QP1Pd-qjl3wvpJYHLTVfhsA",
+     "-7Dzxdx54Lnjg_SSJL-ac3Er0noGV4QCPhpyPKez938"
+    ],
+    "head": "jtZ90tSXCPgW5Kw40YDKDX6OyfE7YXr1OX7Guj7Czjk"
+   },
+   "keeps": []
+  },
+  {
+   "name": "past_the_log",
+   "description": "a run that goes past the log's last epoch: the item with no commitment is dropped",
+   "log_seq": 20,
+   "payload": {
+    "t": "refresh",
+    "first": 2,
+    "epochs": [
+     "-7Dzxdx54Lnjg_SSJL-ac3Er0noGV4QCPhpyPKez938",
+     "7wT_ggVXMDDPj-1IVAL4CCylJjW6qcSt_CywoC_CZ-o"
+    ],
+    "head": "jtZ90tSXCPgW5Kw40YDKDX6OyfE7YXr1OX7Guj7Czjk"
+   },
+   "keeps": [
+    2
+   ]
+  },
+  {
+   "name": "one_wrong",
+   "description": "a secret that doesn't match its commitment is dropped and the others kept",
+   "log_seq": 20,
+   "payload": {
+    "t": "welcome",
+    "epochs": [
+     "PBjkyK2gk_pD3dNV-NRB4EPVZWB0cv4xNWTq__3PdxU",
+     "7wT_ggVXMDDPj-1IVAL4CCylJjW6qcSt_CywoC_CZ-o",
+     "-7Dzxdx54Lnjg_SSJL-ac3Er0noGV4QCPhpyPKez938"
+    ],
+    "head": "jtZ90tSXCPgW5Kw40YDKDX6OyfE7YXr1OX7Guj7Czjk"
+   },
+   "keeps": [
+    0,
+    2
+   ]
+  },
+  {
+   "name": "short_secret",
+   "description": "a 31-byte item is dropped and the others kept",
+   "log_seq": 20,
+   "payload": {
+    "t": "welcome",
+    "epochs": [
+     "PBjkyK2gk_pD3dNV-NRB4EPVZWB0cv4xNWTq__3Pdw",
+     "xJ369jP-pGy9MXSDG3k2QP1Pd-qjl3wvpJYHLTVfhsA",
+     "-7Dzxdx54Lnjg_SSJL-ac3Er0noGV4QCPhpyPKez938"
+    ],
+    "head": "jtZ90tSXCPgW5Kw40YDKDX6OyfE7YXr1OX7Guj7Czjk"
+   },
+   "keeps": [
+    1,
+    2
+   ]
+  },
+  {
+   "name": "not_strings",
+   "description": "items that aren't strings are dropped and the others kept",
+   "log_seq": 20,
+   "payload": {
+    "t": "refresh",
+    "epochs": [
+     null,
+     7,
+     "-7Dzxdx54Lnjg_SSJL-ac3Er0noGV4QCPhpyPKez938"
+    ],
+    "head": "jtZ90tSXCPgW5Kw40YDKDX6OyfE7YXr1OX7Guj7Czjk"
+   },
+   "keeps": [
+    2
+   ]
+  },
+  {
+   "name": "first_negative",
+   "description": "a negative `first` gives nothing, though the items after the first would match",
+   "log_seq": 20,
+   "payload": {
+    "t": "refresh",
+    "first": -1,
+    "epochs": [
+     "7wT_ggVXMDDPj-1IVAL4CCylJjW6qcSt_CywoC_CZ-o",
+     "PBjkyK2gk_pD3dNV-NRB4EPVZWB0cv4xNWTq__3PdxU",
+     "xJ369jP-pGy9MXSDG3k2QP1Pd-qjl3wvpJYHLTVfhsA",
+     "-7Dzxdx54Lnjg_SSJL-ac3Er0noGV4QCPhpyPKez938"
+    ],
+    "head": "jtZ90tSXCPgW5Kw40YDKDX6OyfE7YXr1OX7Guj7Czjk"
+   },
+   "keeps": []
+  },
+  {
+   "name": "first_a_string",
+   "description": "a `first` that is a string gives nothing",
+   "log_seq": 20,
+   "payload": {
+    "t": "refresh",
+    "first": "1",
+    "epochs": [
+     "xJ369jP-pGy9MXSDG3k2QP1Pd-qjl3wvpJYHLTVfhsA",
+     "-7Dzxdx54Lnjg_SSJL-ac3Er0noGV4QCPhpyPKez938"
+    ],
+    "head": "jtZ90tSXCPgW5Kw40YDKDX6OyfE7YXr1OX7Guj7Czjk"
+   },
+   "keeps": []
+  },
+  {
+   "name": "first_true",
+   "description": "`true` isn't a number either",
+   "log_seq": 20,
+   "payload": {
+    "t": "refresh",
+    "first": true,
+    "epochs": [
+     "xJ369jP-pGy9MXSDG3k2QP1Pd-qjl3wvpJYHLTVfhsA",
+     "-7Dzxdx54Lnjg_SSJL-ac3Er0noGV4QCPhpyPKez938"
+    ],
+    "head": "jtZ90tSXCPgW5Kw40YDKDX6OyfE7YXr1OX7Guj7Czjk"
+   },
+   "keeps": []
+  },
+  {
+   "name": "first_null",
+   "description": "nor is `null`: only a `first` left out means 0",
+   "log_seq": 20,
+   "payload": {
+    "t": "refresh",
+    "first": null,
+    "epochs": [
+     "PBjkyK2gk_pD3dNV-NRB4EPVZWB0cv4xNWTq__3PdxU",
+     "xJ369jP-pGy9MXSDG3k2QP1Pd-qjl3wvpJYHLTVfhsA",
+     "-7Dzxdx54Lnjg_SSJL-ac3Er0noGV4QCPhpyPKez938"
+    ],
+    "head": "jtZ90tSXCPgW5Kw40YDKDX6OyfE7YXr1OX7Guj7Czjk"
+   },
+   "keeps": []
+  },
+  {
+   "name": "first_at_the_top",
+   "description": "the largest `first` a payload can carry: no epoch is there",
+   "log_seq": 20,
+   "payload": {
+    "t": "refresh",
+    "first": 9007199254740991,
+    "epochs": [
+     "PBjkyK2gk_pD3dNV-NRB4EPVZWB0cv4xNWTq__3PdxU"
+    ],
+    "head": "jtZ90tSXCPgW5Kw40YDKDX6OyfE7YXr1OX7Guj7Czjk"
+   },
+   "keeps": []
+  },
+  {
+   "name": "epochs_not_an_array",
+   "description": "`epochs` that isn't an array gives nothing",
+   "log_seq": 20,
+   "payload": {
+    "t": "welcome",
+    "epochs": "PBjkyK2gk_pD3dNV-NRB4EPVZWB0cv4xNWTq__3PdxU",
+    "head": "jtZ90tSXCPgW5Kw40YDKDX6OyfE7YXr1OX7Guj7Czjk"
+   },
+   "keeps": []
+  },
+  {
+   "name": "head_unknown",
+   "description": "a head this device hasn't verified: it verifies the log up to it, then looks again",
+   "log_seq": 13,
+   "payload": {
+    "t": "welcome",
+    "epochs": [
+     "PBjkyK2gk_pD3dNV-NRB4EPVZWB0cv4xNWTq__3PdxU",
+     "xJ369jP-pGy9MXSDG3k2QP1Pd-qjl3wvpJYHLTVfhsA",
+     "-7Dzxdx54Lnjg_SSJL-ac3Er0noGV4QCPhpyPKez938"
+    ],
+    "head": "jtZ90tSXCPgW5Kw40YDKDX6OyfE7YXr1OX7Guj7Czjk"
+   },
+   "head_unknown": true
+  },
+  {
+   "name": "no_head",
+   "description": "a welcome without `head` gives nothing",
+   "log_seq": 20,
+   "payload": {
+    "t": "welcome",
+    "epochs": [
+     "PBjkyK2gk_pD3dNV-NRB4EPVZWB0cv4xNWTq__3PdxU",
+     "xJ369jP-pGy9MXSDG3k2QP1Pd-qjl3wvpJYHLTVfhsA",
+     "-7Dzxdx54Lnjg_SSJL-ac3Er0noGV4QCPhpyPKez938"
+    ]
+   },
+   "keeps": []
+  }
+ ],
  "padding": {
   "valid": [
    {

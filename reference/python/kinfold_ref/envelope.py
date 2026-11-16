@@ -6,7 +6,7 @@ import json
 from .crypto import SUITE, VERSION, H, aead_open, aead_seal, ed25519_public, kdf, sign, verify
 from .encoding import BUCKETS, MAX_PAYLOAD, DecodeError, Reader, pad, u8, u16, u32, u64, unb64u, unpad, vec32
 from .identity import HOME_ASSISTANT, RECEIVING_KINDS, WEB, make_wraps, open_wrap, parse_wraps, strictly_ascending
-from .log import TEEN
+from .log import TEEN, epoch_commit
 from .push import GRANT_LEN, parse_watch_grant
 
 CIRCLE, DIRECT = 1, 2
@@ -240,6 +240,31 @@ def _b64_field(obj: dict, name: str, size: int):
     except DecodeError:
         return None
     return b if len(b) == size else None
+
+
+def epoch_secrets_from(obj: dict, state):
+    """Section 8.5: the epoch secrets a `welcome` or `refresh` gives, each checked against the log.
+
+    Item i of `epochs` is the secret of epoch `first` + i, where `first` is 0 when absent. Returns
+    None when the log doesn't hold the payload's `head` yet: the device verifies the log up to it
+    and looks again. Otherwise returns {epoch: secret} for the items that match their commitments.
+    An item that isn't a 32-byte base64url secret, has no commitment or doesn't match is dropped on
+    its own; a payload without a usable `head`, `first` or `epochs` gives nothing."""
+    head = _b64_field(obj, "head", 32)
+    if head is None:
+        return {}
+    if head not in state.hashes:
+        return None
+    first, epochs = obj.get("first", 0), obj.get("epochs")
+    if type(first) is not int or first < 0 or not isinstance(epochs, list):      # bool is not a number here
+        return {}
+    out = {}
+    for i, item in enumerate(epochs):
+        epoch, secret = first + i, _b64_field({"s": item}, "s", 32)
+        commit = state.commits.get(epoch)
+        if secret is not None and commit is not None and epoch_commit(epoch, secret) == commit:
+            out[epoch] = secret
+    return out
 
 
 def sender_may_send(obj: dict, kind: int, sender, state, me: bytes) -> bool:

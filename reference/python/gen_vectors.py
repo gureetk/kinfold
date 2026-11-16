@@ -2327,6 +2327,60 @@ prims = dict(
           dict(bytes="fbffbf", text="-_-_")])
 
 # RFC 9180: check our HPKE against every encryption in the official case for this suite
+# --- the secrets a device keeps from a welcome or refresh (8.5) ----------------------------------------------
+SEC = [b64u(B.secrets[e]) for e in sorted(B.secrets)]
+assert len(SEC) == 3                            # the main log ends in epoch 2
+NOT_A_SECRET = b64u(rnd("welcome/not-a-secret", 32))
+
+
+def welcome_case(name, desc, payload, seq=FINAL):
+    payload = {**payload, "head": b64u(HEADF)}
+    state = {FINAL: SF, BASE: S13}[seq]
+    got = ev.epoch_secrets_from(ev.parse_payload(json.dumps(payload).encode()), state)
+    rec = dict(name=name, description=desc, log_seq=seq, payload=payload)
+    if got is None:
+        rec["head_unknown"] = True
+    else:
+        assert all(B.secrets[e] == x for e, x in got.items())
+        rec["keeps"] = sorted(got)
+    return rec
+
+
+welcomes = [
+    welcome_case("every_epoch", "a welcome with every secret from epoch 0, `first` left out",
+                 {"t": "welcome", "epochs": SEC}),
+    welcome_case("first_zero", "the same with `first` written out", {"t": "welcome", "first": 0, "epochs": SEC}),
+    welcome_case("later_run", "a refresh that starts at epoch 1", {"t": "refresh", "first": 1, "epochs": SEC[1:]}),
+    welcome_case("shifted", "every secret one place off, so none matches its commitment",
+                 {"t": "refresh", "first": 1, "epochs": SEC}),
+    welcome_case("past_the_log", "a run that goes past the log's last epoch: the item with no commitment is dropped",
+                 {"t": "refresh", "first": 2, "epochs": [SEC[2], NOT_A_SECRET]}),
+    welcome_case("one_wrong", "a secret that doesn't match its commitment is dropped and the others kept",
+                 {"t": "welcome", "epochs": [SEC[0], NOT_A_SECRET, SEC[2]]}),
+    welcome_case("short_secret", "a 31-byte item is dropped and the others kept",
+                 {"t": "welcome", "epochs": [b64u(B.secrets[0][:31]), SEC[1], SEC[2]]}),
+    welcome_case("not_strings", "items that aren't strings are dropped and the others kept",
+                 {"t": "refresh", "epochs": [None, 7, SEC[2]]}),
+    welcome_case("first_negative", "a negative `first` gives nothing, though the items after the first would match",
+                 {"t": "refresh", "first": -1, "epochs": [NOT_A_SECRET] + SEC}),
+    welcome_case("first_a_string", "a `first` that is a string gives nothing", {"t": "refresh", "first": "1",
+                                                                               "epochs": SEC[1:]}),
+    welcome_case("first_true", "`true` isn't a number either", {"t": "refresh", "first": True, "epochs": SEC[1:]}),
+    welcome_case("first_null", "nor is `null`: only a `first` left out means 0", {"t": "refresh", "first": None,
+                                                                                 "epochs": SEC}),
+    welcome_case("first_at_the_top", "the largest `first` a payload can carry: no epoch is there",
+                 {"t": "refresh", "first": 2 ** 53 - 1, "epochs": SEC[:1]}),
+    welcome_case("epochs_not_an_array", "`epochs` that isn't an array gives nothing",
+                 {"t": "welcome", "epochs": SEC[0]}),
+    welcome_case("head_unknown", "a head this device hasn't verified: it verifies the log up to it, then looks again",
+                 {"t": "welcome", "epochs": SEC}, seq=BASE),
+]
+no_head = dict(name="no_head", description="a welcome without `head` gives nothing", log_seq=FINAL,
+               payload={"t": "welcome", "epochs": SEC})
+assert ev.epoch_secrets_from(no_head["payload"], SF) == {}
+welcomes.append({**no_head, "keeps": []})
+assert [len(c.get("keeps", ())) for c in welcomes] == [3, 3, 2, 0, 1, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+
 rfc = json.load(open(sys.argv[2]))
 case_ = next(c for c in rfc if c["mode"] == 0 and c["kem_id"] == 0x20 and c["kdf_id"] == 1 and c["aead_id"] == 2)
 X = {k: bytes.fromhex(v) for k, v in case_.items() if isinstance(v, str)}
@@ -2358,6 +2412,7 @@ out = dict(
              entries=B.records, base_seq=BASE, final_seq=FINAL, cases=cases, state_hash=state_hash_vec),
     envelopes=dict(receiver_now=RECEIVER_NOW, valid=valid_envs, invalid=invalid_envs, replay=replay_case,
                    server_repost=server_repost, server_rejects=server_rejects),
+    welcomes=welcomes,
     padding=dict(valid=padding, pad_to=pad_to_vec, invalid=unpad_invalid),
     approx=approx, safety_codes=safety, invite=invite_vec, device_link=link_vec, recovery_kits=recovery_vec,
     setup=setup_vec, server_moves=moves, share_link=share_vec, auth=auth_vec, watch_grants=grant_vec,

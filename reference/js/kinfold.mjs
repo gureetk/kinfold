@@ -1533,6 +1533,30 @@ function b64Field(obj, name, size) {
   }
 }
 
+/**
+ * §8.5: the epoch secrets a `welcome` or `refresh` gives, each checked against the log. Item i of
+ * `epochs` is the secret of epoch `first` + i, where `first` is 0 only when it is left out. Returns
+ * null when the log doesn't hold the payload's `head` yet: verify the log up to it, then look again.
+ * Otherwise returns a Map of epoch -> secret for the items that match their commitments; an item
+ * that isn't a 32-byte base64url secret, has no commitment or doesn't match is dropped on its own,
+ * and a payload without a usable `head`, `first` or `epochs` gives nothing.
+ */
+export async function epochSecretsFrom(payload, state) {
+  const out = new Map();
+  const head = b64Field(payload, 'head', 32);
+  if (head === null) return out;
+  if (!state.hashes.has(toHex(head))) return null;
+  const first = 'first' in payload ? payload.first : 0;
+  if (!Number.isSafeInteger(first) || first < 0 || !Array.isArray(payload.epochs)) return out;
+  for (const [i, item] of payload.epochs.entries()) {
+    const epoch = first + i;
+    const secret = b64Field({ s: item }, 's', 32);
+    const commit = state.commits.get(epoch);
+    if (secret !== null && commit !== undefined && bytesEqual(await epochCommit(epoch, secret), commit)) out.set(epoch, secret);
+  }
+  return out;
+}
+
 // The types whose sender rule needs roles, which a client with frozen private state doesn't know (§6.5).
 const ROLE_RULES = new Set(['pause_req', 'pause_deny', 'place']);
 

@@ -19,18 +19,25 @@ object EpochSecrets {
     }
 
     /**
-     * The secrets in [payload]'s `epochs` (base64url, one per epoch, the index being the epoch),
-     * each kept only if it matches [state]'s commitment for its epoch (§6.5). A payload without a
-     * readable `head` or `epochs` yields no secrets.
+     * The secrets in [payload]'s `epochs`, base64url, one per epoch: item i is the secret of epoch
+     * `first` + i, where `first` is 0 only when it is left out. Each is kept only if it matches
+     * [state]'s commitment for its epoch (§6.5); any other item is dropped on its own. A payload
+     * without a readable `head`, a `first` that is a whole number from 0 up, or an `epochs` array
+     * yields no secrets.
      */
     suspend fun from(p: Primitives, state: CircleState, payload: Json.Obj): Received {
-        val head = payload.string("head")?.let { Base64Url.decode(it) }?.takeIf { it.size == 32 }
-            ?: return Received.Secrets(emptyMap())
+        val none = Received.Secrets(emptyMap())
+        val head = payload.string("head")?.let { Base64Url.decode(it) }?.takeIf { it.size == 32 } ?: return none
         if (!state.hasEntry(Bytes.of(head))) return Received.HeadUnknown
-        val epochs = (payload["epochs"] as? Json.Arr)?.items ?: return Received.Secrets(emptyMap())
+        val first = when (val f = payload["first"]) {
+            null -> 0L
+            is Json.Num -> f.value.takeIf { it >= 0 } ?: return none
+            else -> return none
+        }
+        val epochs = (payload["epochs"] as? Json.Arr)?.items ?: return none
         val out = mutableMapOf<Long, ByteArray>()
         epochs.forEachIndexed { i, item ->
-            val epoch = i.toLong()
+            val epoch = first + i
             val secret = (item as? Json.Str)?.value?.let { Base64Url.decode(it) }?.takeIf { it.size == 32 }
             val commit = state.commits[epoch]
             if (secret != null && commit != null && Details.epochCommit(p, epoch, secret) == commit) out[epoch] = secret

@@ -80,6 +80,10 @@ The **public state** a server keeps is the same object without `name`, `flags`, 
 - `server_repost`: one server processes `sequence` in order: the first post is `stored`, the same bytes again are a `duplicate` (a success), and different bytes under the same sender and `seq` are a `replay` (§7.5).
 - `server_rejects`: envelopes a server must refuse with `server_error` but that the `receiver` can still open to `payload`.
 
+### `welcomes`
+
+What a device keeps from a `welcome` or `refresh` (§8.5). Each case has a `payload` (the decoded JSON object), read against the main log through `log_seq` with every epoch secret, and either `keeps`, the epochs whose secrets the device keeps (each equal to `log.epoch_secrets`), or `head_unknown: true`, when the device must first verify the log up to the payload's `head`. The cases cover a run that starts after epoch 0 (`first`), items that are dropped while the rest count, a run that reaches past the log's last epoch, and `first` values that give nothing: negative, a string, `true`, `null`, and the largest number a payload can hold.
+
 ### `padding`, `approx`, `safety_codes`
 
 - `padding.valid`: `payload_length` copies of `payload_byte`, padded to the bucket `padded_length`, whose SHA-256 is `padded_sha256`. `padding.pad_to`: the same for `PadTo` with the fixed size `to` (512 for log details, 2,560 for pushes). `padding.invalid`: inputs `Unpad` must reject.
