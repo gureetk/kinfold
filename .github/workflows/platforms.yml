@@ -2,7 +2,9 @@
 name: Platform crypto
 
 on:
+  # Branches are tested through their pull requests; pushes only on main.
   push:
+    branches: [main]
     paths: ["spec/vectors/**", "reference/platforms/**", ".github/workflows/platforms.yml"]
   pull_request:
     paths: ["spec/vectors/**", "reference/platforms/**", ".github/workflows/platforms.yml"]
