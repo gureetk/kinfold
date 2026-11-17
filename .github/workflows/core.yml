@@ -166,12 +166,12 @@ jobs:
           unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/gradle-9.9.1/bin" >> "$GITHUB_PATH"
 
-      # Kotlin/Native downloads its own LLVM, libffi and lldb and checks no hash, and JetBrains
-      # publishes none. So they are fetched here and checked against the SHA-256s below, and
-      # Kotlin/Native finds them in its cache instead of downloading them.
-      - name: Kotlin/Native's LLVM, libffi and lldb, checked against pinned SHA-256s
+      # Kotlin/Native downloads its own LLVM and libffi and checks no hash, and JetBrains
+      # publishes none. So they are fetched here and checked against the SHA-256s below, which
+      # two runners agreed on, and Kotlin/Native finds them in its cache instead.
+      - name: Kotlin/Native's LLVM and libffi, checked against pinned SHA-256s
         run: |
-          cache="$HOME/.konan/cache"
+          cache="$HOME/.konan/dependencies/cache"
           mkdir -p "$cache"
           fetch() {
             file="$cache/$(basename "$2")"
@@ -180,7 +180,6 @@ jobs:
           }
           fetch 62fd78f090353aa7b2c6601ad6f95bd7a0b0558b18f86978043cc878321b408a resources/llvm/21-aarch64-macos/llvm-21-aarch64-macos-essentials-97.tar.gz
           fetch 8ca0102ad5b626e8b1699f311ab098354a90154ea3e44951f28ebdd256862ba9 libffi-3.3-1-macos-arm64.tar.gz
-          fetch 069193359103d4e4a4653f236e7a963e266a4a366905e858d4a68e701f43866e lldb-4-macos.tar.gz
 
       - name: Xcode and the simulator
         run: |
@@ -206,11 +205,11 @@ jobs:
         run: |
           log="$RUNNER_TEMP/gradle.log"
           for attempt in 1 2 3 4; do
-            if gradle --no-daemon --console=plain iosSimulatorArm64Test linkDebugTestIosArm64 -Pkinfold.simulator="$SIMULATOR" > "$log" 2>&1; then
-              cat "$log"
+            if gradle --no-daemon --console=plain --warning-mode all iosSimulatorArm64Test linkDebugTestIosArm64 -Pkinfold.simulator="$SIMULATOR" > "$log" 2>&1; then
+              cat "$log" | tee -a "$RUNNER_TEMP/all.log"
               break
             fi
-            cat "$log"
+            cat "$log" | tee -a "$RUNNER_TEMP/all.log"
             # Only a failed download is worth another try; Maven Central sometimes answers 429.
             if ! grep -q -E "Could not (GET|HEAD|download|resolve)|Read timed out|429" "$log"; then exit 1; fi
             [ "$attempt" = 4 ] && exit 1
@@ -227,12 +226,10 @@ jobs:
           raise SystemExit(1 if failed or not tests else 0)
           PY2
 
-      - name: Nothing else downloaded unchecked
+      - name: Kotlin/Native downloaded nothing itself
         run: |
-          cat "$HOME/.konan/dependencies/.extracted"
-          extra=$(grep -v -x -F -e llvm-21-aarch64-macos-essentials-97 -e libffi-3.3-1-macos-arm64 -e lldb-4-macos "$HOME/.konan/dependencies/.extracted" || true)
-          if [ -n "$extra" ]; then
-            echo "Kotlin/Native downloaded dependencies that no hash checked: $extra"
+          if grep "Downloading dependency " "$RUNNER_TEMP/all.log"; then
+            echo "Kotlin/Native downloaded the above, which no hash checked"
             exit 1
           fi
 
