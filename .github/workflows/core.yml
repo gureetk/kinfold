@@ -205,7 +205,7 @@ jobs:
         run: |
           log="$RUNNER_TEMP/gradle.log"
           for attempt in 1 2 3 4; do
-            if gradle --no-daemon --console=plain --warning-mode all iosSimulatorArm64Test linkDebugTestIosArm64 -Pkinfold.simulator="$SIMULATOR" > "$log" 2>&1; then
+            if gradle --no-daemon --console=plain iosSimulatorArm64Test linkDebugTestIosArm64 -Pkinfold.simulator="$SIMULATOR" > "$log" 2>&1; then
               cat "$log" | tee -a "$RUNNER_TEMP/all.log"
               break
             fi
