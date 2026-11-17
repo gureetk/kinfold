@@ -23,13 +23,13 @@ The file is about 1.3 MB. Most of that is a handful of vectors that test size li
 
 ## What a server must pass, and what a client must pass
 
-A client passes everything. A server passes `primitives`, `hpke_rfc9180`, `ed25519`, `x25519`, `identities`, the log in public mode (`public_result`, `public_reason` and the public state), the `server_error` of every envelope, `server_repost`, `watch_grants`, building the `push` vectors and the relay signature, `setup`, `server_moves` and `auth`. Rebuilding a sealed object byte for byte needs a fixed HPKE ephemeral key (`ikm`, `wrap_ikm`, `response_ikm`), which many platforms can't inject; those checks are optional, and opening is not (§3.5).
+A client passes everything. A server passes `primitives`, `hpke_rfc9180`, `ed25519`, `x25519`, `identities`, the log in public mode (`public_result`, `public_reason` and the public state), the `server_error` of every envelope, `server_repost`, `watch_grants`, building the `push` vectors and the relay signature, `setup`, `server_moves` and `auth`. Rebuilding a sealed object byte for byte needs a fixed HPKE ephemeral key (`ikm`, `wrap_ikm`, `response_ikm`), which many platforms can't inject; those checks are optional, and opening is not (§3.5). Likewise, rebuilding a signed object byte for byte needs a platform that signs deterministically, as RFC 8032 does; one that adds randomness, as CryptoKit does, checks that its signatures verify instead (§3.3).
 
 ## Groups
 
 ### `primitives`
 
-`H`, `kdf` and `sign` each give a full label (`kinfold/v0/test`), inputs and the expected output. Ed25519 is deterministic, so `sig` must match exactly. `b64u` pairs bytes with their unpadded base64url text.
+`H`, `kdf` and `sign` each give a full label (`kinfold/v0/test`), inputs and the expected output. The signatures are RFC 8032's deterministic ones, so `sig` matches exactly where a platform signs that way; elsewhere it has to verify, and so does the platform's own. `b64u` pairs bytes with their unpadded base64url text.
 
 ### `hpke_rfc9180`
 

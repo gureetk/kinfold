@@ -1,14 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
+import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
+import org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest
+
 plugins {
     kotlin("multiplatform") version "2.4.21"
     id("com.android.kotlin.multiplatform.library") version "9.5.1"
 }
 
+val vectorsFile: String = layout.projectDirectory.file("../spec/vectors/kinfold-v0.json").asFile.canonicalPath
+val protocolFile: String = layout.projectDirectory.file("../spec/PROTOCOL.md").asFile.canonicalPath
+
 // The device tests read the vectors and the spec as Java resources of the test APK.
 val copyVectors = tasks.register<Copy>("copyVectors") {
-    from("../spec/vectors/kinfold-v0.json", "../spec/PROTOCOL.md")
+    from(vectorsFile, protocolFile)
     into(layout.buildDirectory.dir("vectors"))
 }
+
+// The iOS targets build only on a Mac: Xcode compiles the CryptoKit layer, and the Apple SDKs
+// live there. Elsewhere they are left out, and the build is the JVM and Android one.
+val onMac = System.getProperty("os.name").startsWith("Mac")
 
 // Each library is pinned, and gradle/verification-metadata.xml holds the SHA-256 of every
 // artifact the build uses. Gradle refuses any artifact whose hash doesn't match.
@@ -26,6 +36,12 @@ kotlin {
         }.configure {
             instrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         }
+    }
+
+    // iPhones, and the simulator on Apple silicon. iOS 17 is the oldest with CryptoKit's HPKE.
+    if (onMac) {
+        iosArm64 { cryptoKit(sdk = "iphoneos", target = "arm64-apple-ios17.0") }
+        iosSimulatorArm64 { cryptoKit(sdk = "iphonesimulator", target = "arm64-apple-ios17.0-simulator") }
     }
 
     compilerOptions {
@@ -59,11 +75,89 @@ kotlin {
                 implementation("androidx.test:runner:1.7.0")
             }
         }
+        if (onMac) {
+            iosTest {
+                // Where the simulator's test process finds the vectors and the spec
+                kotlin.srcDir(specFiles())
+            }
+        }
+        // Calling Objective-C means pinning Kotlin arrays and passing pointers.
+        matching { it.name.startsWith("ios") }.configureEach {
+            languageSettings.optIn("kotlinx.cinterop.ExperimentalForeignApi")
+            languageSettings.optIn("kotlinx.cinterop.BetaInteropApi")
+        }
     }
 }
 
-val vectorsFile = layout.projectDirectory.file("../spec/vectors/kinfold-v0.json").asFile.path
-
 tasks.withType<Test>().configureEach {
     systemProperty("kinfold.vectors", vectorsFile)
+}
+
+// The simulator to test on, by name or UDID, as -Pkinfold.simulator=...; Kotlin's default otherwise.
+tasks.withType<KotlinNativeSimulatorTest>().configureEach {
+    providers.gradleProperty("kinfold.simulator").orNull?.let { device.set(it) }
+}
+
+/**
+ * Compiles the CryptoKit layer (src/iosMain/swift) for one iOS target, and imports it into
+ * Kotlin through the Objective-C header that Swift writes for it.
+ */
+fun KotlinNativeTarget.cryptoKit(sdk: String, target: String) {
+    val dir = layout.buildDirectory.dir("cryptokit/$name")
+    val source = layout.projectDirectory.file("src/iosMain/swift/KinfoldCryptoKit.swift")
+    val swift = tasks.register<Exec>("cryptoKit" + name.replaceFirstChar { it.uppercase() }) {
+        description = "Compiles the CryptoKit layer for $target."
+        inputs.file(source)
+        outputs.dir(dir)
+        val out = dir.get().asFile
+        doFirst { out.mkdirs() }
+        commandLine(
+            "xcrun", "--sdk", sdk, "swiftc", "-parse-as-library", "-emit-library", "-static", "-O",
+            "-module-name", "KinfoldCryptoKit", "-target", target,
+            "-emit-objc-header", "-emit-objc-header-path", out.resolve("KinfoldCryptoKit-Swift.h").path,
+            "-o", out.resolve("libKinfoldCryptoKit.a").path,
+            source.asFile.path,
+        )
+    }
+    val interop = compilations.getByName("main").cinterops.create("cryptokit") {
+        definitionFile.set(layout.projectDirectory.file("src/iosMain/cinterop/cryptokit.def"))
+        includeDirs(dir)
+        extraOpts("-libraryPath", dir.get().asFile.path)
+    }
+    tasks.named(interop.interopProcessingTaskName) { dependsOn(swift) }
+    binaries.all {
+        // Kotlin/Native links for iOS 15 unless told otherwise; the Swift is built for 17.
+        freeCompilerArgs += "-Xoverride-konan-properties=osVersionMin.${konanTarget.name}=17.0"
+        // The toolchain's Swift libraries, besides the SDK's, for anything the Swift object asks for.
+        linkerOpts("-L${xcodeToolchain()}/usr/lib/swift/$sdk")
+    }
+}
+
+/** Xcode's default toolchain, from the Xcode that xcode-select names. */
+fun xcodeToolchain(): String =
+    providers.exec { commandLine("xcode-select", "-p") }.standardOutput.asText.get().trim() +
+        "/Toolchains/XcodeDefault.xctoolchain"
+
+/** Writes SpecFiles.kt, which holds the paths of the vectors and the spec for the iOS tests. */
+fun specFiles(): TaskProvider<Task> = tasks.register("specFiles") {
+    val out = layout.buildDirectory.dir("generated/specFiles")
+    val paths = listOf(vectorsFile, protocolFile)
+    inputs.property("paths", paths)
+    outputs.dir(out)
+    doLast {
+        fun literal(s: String) = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"").replace("$", "\\$") + "\""
+        val file = out.get().file("ca/gureet/kinfold/core/SpecFiles.kt").asFile
+        file.parentFile.mkdirs()
+        file.writeText(
+            """
+            |// Generated by build.gradle.kts: where the iOS tests find the spec's files.
+            |package ca.gureet.kinfold.core
+            |
+            |internal object SpecFiles {
+            |    const val VECTORS = ${literal(paths[0])}
+            |    const val PROTOCOL = ${literal(paths[1])}
+            |}
+            |""".trimMargin(),
+        )
+    }
 }

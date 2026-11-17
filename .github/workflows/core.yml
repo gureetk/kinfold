@@ -144,3 +144,92 @@ jobs:
           print(f"{tests} tests on the device, {failed} failed")
           raise SystemExit(1 if failed or not tests else 0)
           PY
+
+  # The same tests on iOS, against CryptoKit in the simulator, and the build for iPhones.
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Gradle 9.9.1, checked against its published SHA-256
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/gradle.zip" https://services.gradle.org/distributions/gradle-9.9.1-bin.zip
+          echo "d8a18a7a841dd5df825d35a685fad6f2d7f12ac0c280e57b67c27b4a520ba228  $RUNNER_TEMP/gradle.zip" | shasum -a 256 -c
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-9.9.1/bin" >> "$GITHUB_PATH"
+
+      # Kotlin/Native downloads its own LLVM and libffi and checks no hash, and JetBrains
+      # publishes none. So they are fetched here and checked against the SHA-256s below, which
+      # two runners agreed on, and Kotlin/Native finds them in its cache instead.
+      - name: Kotlin/Native's LLVM and libffi, checked against pinned SHA-256s
+        run: |
+          cache="$HOME/.konan/dependencies/cache"
+          mkdir -p "$cache"
+          fetch() {
+            file="$cache/$(basename "$2")"
+            curl -fsSL -o "$file" "https://download.jetbrains.com/kotlin/native/$2"
+            echo "$1  $file" | shasum -a 256 -c
+          }
+          fetch 62fd78f090353aa7b2c6601ad6f95bd7a0b0558b18f86978043cc878321b408a resources/llvm/21-aarch64-macos/llvm-21-aarch64-macos-essentials-97.tar.gz
+          fetch 8ca0102ad5b626e8b1699f311ab098354a90154ea3e44951f28ebdd256862ba9 libffi-3.3-1-macos-arm64.tar.gz
+
+      - name: Xcode and the simulator
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes available
+          # The newest iOS runtime's first iPhone
+          device=$(xcrun simctl list devices available --json | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          ios = sorted((k for k in devices if ".iOS-" in k), key=lambda k: [int(x) for x in k.rsplit("iOS-", 1)[1].split("-")])
+          for runtime in reversed(ios):
+              for d in devices[runtime]:
+                  if d["name"].startswith("iPhone"):
+                      print(d["udid"], runtime.rsplit(".", 1)[1], d["name"], file=sys.stderr)
+                      print(d["udid"])
+                      sys.exit()
+          sys.exit("no iPhone simulator")
+          ')
+          echo "SIMULATOR=$device" >> "$GITHUB_ENV"
+
+      - name: The vectors on the iOS simulator, and the test binary for iPhones
+        working-directory: core
+        run: |
+          log="$RUNNER_TEMP/gradle.log"
+          for attempt in 1 2 3 4; do
+            if gradle --no-daemon --console=plain iosSimulatorArm64Test linkDebugTestIosArm64 -Pkinfold.simulator="$SIMULATOR" > "$log" 2>&1; then
+              cat "$log" | tee -a "$RUNNER_TEMP/all.log"
+              break
+            fi
+            cat "$log" | tee -a "$RUNNER_TEMP/all.log"
+            # Only a failed download is worth another try; Maven Central sometimes answers 429.
+            if ! grep -q -E "Could not (GET|HEAD|download|resolve)|Read timed out|429" "$log"; then exit 1; fi
+            [ "$attempt" = 4 ] && exit 1
+            sleep $((attempt * 30))
+          done
+          python3 - <<'PY2'
+          import glob, xml.etree.ElementTree as ET
+          tests = failed = 0
+          for f in glob.glob("build/test-results/iosSimulatorArm64Test/*.xml"):
+              t = ET.parse(f).getroot()
+              tests += int(t.get("tests", 0))
+              failed += int(t.get("failures", 0)) + int(t.get("errors", 0))
+          print(f"{tests} tests in the simulator, {failed} failed")
+          raise SystemExit(1 if failed or not tests else 0)
+          PY2
+
+      - name: Kotlin/Native downloaded nothing itself
+        run: |
+          if grep "Downloading dependency " "$RUNNER_TEMP/all.log"; then
+            echo "Kotlin/Native downloaded the above, which no hash checked"
+            exit 1
+          fi
+

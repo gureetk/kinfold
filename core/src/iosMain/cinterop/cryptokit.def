@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
+#
+# The Objective-C interface of src/iosMain/swift/KinfoldCryptoKit.swift. The build compiles the
+# Swift into libKinfoldCryptoKit.a and writes KinfoldCryptoKit-Swift.h next to it for each iOS
+# target, and names that directory as the include and library path (build.gradle.kts).
+language = Objective-C
+package = ca.gureet.kinfold.core.crypto.cryptokit
+headers = KinfoldCryptoKit-Swift.h
+headerFilter = KinfoldCryptoKit-Swift.h
+staticLibraries = libKinfoldCryptoKit.a
+# The Swift object asks the linker for the Swift runtime and CryptoKit itself, and -ObjC keeps
+# the Objective-C class it defines, which only the Objective-C runtime looks up by name.
+linkerOpts = -L/usr/lib/swift -ObjC
