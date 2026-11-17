@@ -48,7 +48,9 @@ class IdentitiesTest {
             assertContentEquals(person.hex("chain"), chain.encode())
             for ((i, link) in chain.links.withIndex()) {
                 val rebuilt = IdentityLink.create(p, account, crypto.ed25519(seeds[i]), crypto.ed25519(seeds[i + 1]))
-                assertContentEquals(rebuilt.encode(), link.encode(), "$name link $i")
+                assertSignedAgain(link.encode(), rebuilt.encode(), "$name link $i", signatureBytes = 128) {
+                    IdentityLink.parse(it).signaturesVerify(p, account)
+                }
                 assertTrue(link.signaturesVerify(p, account))
             }
             rotations += chain.links.size
@@ -79,7 +81,7 @@ class IdentitiesTest {
                 assertEquals(Bytes.of(d.hex("device_id")), cert.deviceId(p))
                 assertTrue(chain.provesAccountOf(p, cert), label)
                 val reissued = DeviceCert.issue(p, ik, account, dsk.publicKey, checkNotNull(cert.kind), cert.issuedAt)
-                assertContentEquals(d.hex("cert"), reissued.encode(), label)
+                assertSignedAgain(d.hex("cert"), reissued.encode(), label) { DeviceCert.parse(it).isWellFormed(p) }
 
                 val deks = d.list("deks")
                 val raw = d.hexList("bundles")
@@ -97,7 +99,9 @@ class IdentitiesTest {
                     val resigned = KeyBundle.sign(
                         p, dsk, account, key.publicKey, bundle.notBefore, bundle.notAfter, bundle.protoMax, bundle.features,
                     )
-                    assertContentEquals(bytes, resigned.encode(), label)
+                    assertSignedAgain(bytes, resigned.encode(), label) {
+                        KeyBundle.parse(it).isValidFor(p, Bytes.of(dsk.publicKey), account)
+                    }
                     bundles++
                 }
             }

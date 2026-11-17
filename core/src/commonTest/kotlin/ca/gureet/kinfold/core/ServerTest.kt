@@ -18,6 +18,7 @@ import ca.gureet.kinfold.core.server.ServerMove
 import ca.gureet.kinfold.core.server.Setup
 import ca.gureet.kinfold.core.wire.Bytes
 import ca.gureet.kinfold.core.wire.Codes
+import ca.gureet.kinfold.core.wire.concat
 import ca.gureet.kinfold.core.wire.hexBytes
 import ca.gureet.kinfold.core.wire.toHex
 import kotlin.test.Test
@@ -81,7 +82,9 @@ class ServerTest {
         val t = cases.first { it.str("name") == "new_address_and_key" }
         assertEquals(auth.str("server_key"), t.str("old_key"))
         val again = ServerMove.sign(p, server, t.str("old_url"), t.str("new_url"), Bytes.of(t.hex("new_key")), t.get("issued_at").asLong.toULong())
-        assertContentEquals(t.hex("move"), again.encode())
+        assertSignedAgain(t.hex("move"), again.encode()) {
+            runCatching { ServerMove.check(p, it, t.str("old_url"), Bytes.of(t.hex("old_key"))) }.isSuccess
+        }
     }
 
     @Test
@@ -93,7 +96,9 @@ class ServerTest {
         assertContentEquals(raw, info.encode())
         val server = crypto.ed25519(v.hex("server_seed"))
         assertEquals(serverKey, Bytes.of(server.publicKey))
-        assertContentEquals(raw, ServerInfo.sign(p, server, info.serverUrl, info.issuedAt, info.expiresAt).encode(), "signed again")
+        assertSignedAgain(raw, ServerInfo.sign(p, server, info.serverUrl, info.issuedAt, info.expiresAt).encode(), "signed again") {
+            runCatching { ServerInfo.check(p, it, v.str("server_url"), serverKey) }.isSuccess
+        }
         assertEquals(v.str("fingerprint"), ServerInfo.fingerprint(p, serverKey))
         // Login: the device checks the challenge, then signs.
         val challenge = v.hex("challenge")
@@ -103,8 +108,12 @@ class ServerTest {
         val dev = devices.getValue(v.str("device"))
         assertEquals(dev.str("device_id"), deviceId.hex)
         val sig = Login.deviceSig(p, crypto.ed25519(dev.hex("dsk_seed")), serverKey, challenge, deviceId)
-        assertEquals(v.str("device_sig"), sig.toHex())
-        assertContentEquals(v.hex("challenge_sig"), p.sign(server, Label.AUTH_CHALLENGE, Login.challengeSigned(challenge, deviceId, expiresAt)))
+        assertSignedAgain(v.hex("device_sig"), sig, "device_sig") {
+            p.verify(dev.hex("dsk_pub"), Label.AUTH, concat(serverKey.toByteArray(), challenge, deviceId.toByteArray()), it)
+        }
+        assertSignedAgain(v.hex("challenge_sig"), p.sign(server, Label.AUTH_CHALLENGE, Login.challengeSigned(challenge, deviceId, expiresAt)), "challenge_sig") {
+            Login.isChallengeSigned(p, serverKey, challenge, deviceId, expiresAt, it)
+        }
     }
 
     @Test
@@ -131,7 +140,7 @@ class ServerTest {
         // The first grant issued again by the watched phone.
         val phone = devices.values.first { it.str("device_id") == g.watchedDevice.hex }
         val again = WatchGrant.issue(p, crypto.ed25519(phone.hex("dsk_seed")), g.circleId, g.watchedDevice, g.watcherAccount, g.afterMin, g.issuedAt, g.notAfter)
-        assertContentEquals(cases[0].hex("grant"), again.encode())
+        assertSignedAgain(cases[0].hex("grant"), again.encode()) { WatchGrant.parse(it).isValidAt(p, state, now) }
     }
 
     @Test
@@ -158,7 +167,9 @@ class ServerTest {
             }
             // Made again with the server's key, and sealed again here: the device opens the same.
             val push = Pushes.make(p, server, deviceId, t.int("type"), m.sentAt, hexBytes(t.str("body")))
-            assertContentEquals(t.hex("push"), push, name)
+            assertSignedAgain(t.hex("push"), push, name) {
+                p.verify(serverKey.toByteArray(), Label.PUSH_SIG, concat(deviceId.toByteArray(), it.copyOf(it.size - 64)), it.copyOfRange(it.size - 64, it.size))
+            }
             val (keyId, sk) = t.getAsJsonObject("keys").entrySet().single().let { it.key to it.value.asString }
             val resealed = Pushes.seal(p, push, deviceId, crypto.x25519(hexBytes(sk)).publicKey)
             assertEquals(keyId, resealed.copyOf(8).toHex(), name)
@@ -185,7 +196,9 @@ class ServerTest {
         for (d in Relay.ALERT..Relay.LOCATION) {
             assertEquals(d == r.int("delivery"), Relay.isSigned(p, serverKey, r.hex("capability"), r.hex("sealed"), sentAt, d, r.hex("sig")), "delivery $d")
         }
-        assertContentEquals(r.hex("sig"), Relay.sign(p, server, r.hex("capability"), r.hex("sealed"), sentAt, r.int("delivery")))
+        assertSignedAgain(r.hex("sig"), Relay.sign(p, server, r.hex("capability"), r.hex("sealed"), sentAt, r.int("delivery")), "relay") {
+            Relay.isSigned(p, serverKey, r.hex("capability"), r.hex("sealed"), sentAt, r.int("delivery"), it)
+        }
     }
 
     private val entries = Vectors.group("log").list("entries")

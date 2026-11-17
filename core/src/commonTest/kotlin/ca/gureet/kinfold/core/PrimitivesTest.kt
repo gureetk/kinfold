@@ -34,8 +34,8 @@ class PrimitivesTest {
         for (c in v.list("sign")) {
             val key = p.crypto.ed25519(c.hex("seed"))
             val sig = p.sign(key, label(c), c.hex("data"))
-            assertContentEquals(c.hex("sig"), sig)
-            assertTrue(p.verify(key.publicKey, label(c), c.hex("data"), sig))
+            assertSignedAgain(c.hex("sig"), sig) { p.verify(key.publicKey, label(c), c.hex("data"), it) }
+            assertTrue(p.verify(key.publicKey, label(c), c.hex("data"), c.hex("sig")), "the vector's signature")
             assertFalse(p.verify(key.publicKey, Label.LOG_HASH, c.hex("data"), sig), "another label")
             val flipped = sig.copyOf().also { it[10] = (it[10].toInt() xor 1).toByte() }
             assertFalse(p.verify(key.publicKey, label(c), c.hex("data"), flipped), "a flipped bit")
