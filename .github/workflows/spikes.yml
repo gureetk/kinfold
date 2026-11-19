@@ -220,7 +220,7 @@ jobs:
   # The iOS project (spikes/ios): the core's XCFramework and test binaries, both apps built for the
   # simulator and for iPhones without signing, and each run in the simulator. CoreTests runs the
   # core's tests from inside an app, as it will on the iPhone; the Kinfold app runs the core check
-  # and spike 5's page in WebKit (--checks), which must finish.
+  # and spike 5's page in WebKit (--checks).
   ios:
     runs-on: macos-26
     timeout-minutes: 75
@@ -314,5 +314,4 @@ jobs:
           log="$RUNNER_TEMP/kinfold.log"
           xcrun simctl launch --console-pty "$SIMULATOR" ca.gureet.kinfold --checks > "$log" 2>&1 || true
           cat "$log"
-          # The page's own verdict in WebKit is spike 5's result: reported here, not required yet.
-          grep -q "The core check passed." "$log" && grep -q "The page finished" "$log"
+          grep -q "The core check passed." "$log" && grep -q "The page finished: every check passed." "$log"

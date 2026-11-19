@@ -42,6 +42,6 @@ The first run from Xcode asks the iPhone for Developer Mode (Settings › Privac
 
 ## In CI
 
-The `spikes` workflow's `ios` job, on GitHub's macOS runners, runs `build-core.sh`, then builds both apps for iPhones and for the simulator without signing. It then runs both apps in the simulator. CoreTests runs the core's tests, which must pass. Kinfold, launched with `--checks`, runs the core check and the page by itself, prints what they found and exits. The core check must pass and the page must finish. What the page finds is spike 5's result, which the job shows.
+The `spikes` workflow's `ios` job, on GitHub's macOS runners, runs `build-core.sh`, then builds both apps for iPhones and for the simulator without signing. It then runs both apps in the simulator. CoreTests runs the core's tests, which must pass. Kinfold, launched with `--checks`, runs the core check and the page by itself, prints what they found and exits. Both must pass.
 
-In the simulator, WebKit's WebCrypto gives every verdict the vectors require, but its Ed25519 signatures never repeat, like CryptoKit's (PROTOCOL.md §3.3). So the page's checks that rebuild a signed structure and compare it byte for byte fail there, 85 of them; everything else passes. Spike 5 teaches `reference/js` to compare such structures as the core's tests do on CryptoKit.
+In the simulator, WebKit's WebCrypto gives every verdict the vectors require, and its Ed25519 signatures never repeat, like CryptoKit's (PROTOCOL.md §3.3). `reference/js` checks the structures it signs again up to their signatures there, as the core's tests do on CryptoKit.
