@@ -26,6 +26,7 @@ License: GPL-3.0-or-later with the app-store permission in `LICENSES/LicenseRef-
 
 - `harness/`: the other family member, a command line on the JVM (below).
 - `android/`: the Android spike app, with spike 2 (below).
+- `ios/`: the Xcode project, with the iOS spike app and the host that runs the core's tests on an iPhone ([its README](ios/README.md)).
 - `web/`: spike 5's page, which runs the JavaScript checks in a browser.
 
 One Gradle build covers the JVM and Android code here (`settings.gradle.kts`). It builds the shared core from `../core`, so a spike always runs the core of its own commit, and `gradle/verification-metadata.xml` holds the SHA-256 of every artifact that build uses, the core's among them. It needs what the core needs: JDK 21, Gradle 9.9.1 and an Android SDK with platform 37.0. The metadata holds the Linux build of aapt2, Android's resource compiler, which CI uses; building the app on macOS or Windows needs that system's build of it added in the same way.

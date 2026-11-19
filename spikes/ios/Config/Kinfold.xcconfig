@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
+//
+// What every target of the spikes' Xcode project shares. The team that signs builds for your
+// iPhone goes in Local.xcconfig, next to this file, which git ignores: copy Local.xcconfig.example.
+// Choosing a team in Xcode's Signing & Capabilities would write it into the project instead.
+
+IPHONEOS_DEPLOYMENT_TARGET = 17.0
+SDKROOT = iphoneos
+SUPPORTED_PLATFORMS = iphoneos iphonesimulator
+SUPPORTS_MACCATALYST = NO
+SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO
+SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO
+TARGETED_DEVICE_FAMILY = 1
+
+// KinfoldCore.xcframework holds iPhones and the simulator on Apple silicon.
+EXCLUDED_ARCHS[sdk=iphonesimulator*] = x86_64
+
+SWIFT_VERSION = 5.0
+CODE_SIGN_STYLE = Automatic
+// The build phases read the repository's files outside the project.
+ENABLE_USER_SCRIPT_SANDBOXING = NO
+ALWAYS_SEARCH_USER_PATHS = NO
+CLANG_ENABLE_MODULES = YES
+ENABLE_STRICT_OBJC_MSGSEND = YES
+MARKETING_VERSION = 0.1
+CURRENT_PROJECT_VERSION = 1
+
+#include? "Local.xcconfig"

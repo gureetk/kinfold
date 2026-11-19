@@ -11,3 +11,9 @@ spikes/build/
 spikes/*/build/
 # The harness's data: keys that read the test circle
 harness-data/
+
+# The spikes' Xcode project: your signing team, and what Xcode writes for you alone
+spikes/ios/Config/Local.xcconfig
+spikes/ios/build/
+xcuserdata/
+*.xcodeproj/project.xcworkspace/

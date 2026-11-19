@@ -3,8 +3,9 @@ name: Spikes
 
 # The spikes' code (spikes/): what can be built and tested without a phone. The harness is tested
 # against a server built from server/; spike 2's Android app is built and unit-tested, and runs in
-# emulators against such a server and the harness. Both build the core from core/, so changes there
-# and in server/ start this too.
+# emulators against such a server and the harness; the iOS project is built for the simulator and
+# for iPhones, unsigned, and its two apps run their checks in the simulator. All of them build the
+# core from core/, so changes there and in server/ start this too.
 on:
   # Branches are tested through their pull requests; pushes only on main.
   push:
@@ -215,3 +216,102 @@ jobs:
           done
           adb reverse tcp:8443 tcp:8443
           ../core/test-with-server.sh --no-daemon
+
+  # The iOS project (spikes/ios): the core's XCFramework and test binaries, both apps built for the
+  # simulator and for iPhones without signing, and each run in the simulator. CoreTests runs the
+  # core's tests from inside an app, as it will on the iPhone; the Kinfold app runs the core check
+  # and spike 5's page in WebKit (--checks).
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # Gradle's downloads, kept from run to run so that a run asks Maven Central for little: it
+      # turns busy runners away. Gradle checks every artifact against verification-metadata.xml
+      # whether it was downloaded or kept, so a kept one can't change what a build uses.
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.gradle/caches/modules-2
+          key: gradle-${{ github.workflow }}-${{ github.job }}-${{ runner.os }}-${{ hashFiles('**/gradle/verification-metadata.xml') }}
+          restore-keys: gradle-${{ github.workflow }}-${{ github.job }}-${{ runner.os }}-
+
+      - name: Gradle 9.9.1, checked against its published SHA-256
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/gradle.zip" https://services.gradle.org/distributions/gradle-9.9.1-bin.zip
+          echo "d8a18a7a841dd5df825d35a685fad6f2d7f12ac0c280e57b67c27b4a520ba228  $RUNNER_TEMP/gradle.zip" | shasum -a 256 -c
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-9.9.1/bin" >> "$GITHUB_PATH"
+
+      # build-core.sh checks Kotlin/Native's own downloads first (core/kotlin-native-deps.sh).
+      - name: The core's XCFramework and test binaries
+        run: |
+          log="$RUNNER_TEMP/core.log"
+          for attempt in 1 2 3 4 5; do
+            if spikes/ios/build-core.sh --no-daemon --stacktrace > "$log" 2>&1; then
+              cat "$log"
+              break
+            fi
+            cat "$log"
+            if ! grep -q -E "Could not (GET|HEAD|download|resolve)|could not resolve plugin artifact|Read timed out|429" "$log"; then exit 1; fi
+            [ "$attempt" = 5 ] && exit 1
+            sleep $((attempt * 60))
+          done
+          if grep "Downloading dependency " "$log"; then
+            echo "Kotlin/Native downloaded the above, which no hash checked"
+            exit 1
+          fi
+
+      - name: The newest iOS simulator's first iPhone
+        run: |
+          xcodebuild -version
+          device=$(xcrun simctl list devices available --json | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          ios = sorted((k for k in devices if ".iOS-" in k), key=lambda k: [int(x) for x in k.rsplit("iOS-", 1)[1].split("-")])
+          for runtime in reversed(ios):
+              for d in devices[runtime]:
+                  if d["name"].startswith("iPhone"):
+                      print(d["udid"], runtime.rsplit(".", 1)[1], d["name"], file=sys.stderr)
+                      print(d["udid"])
+                      sys.exit()
+          sys.exit("no iPhone simulator")
+          ')
+          echo "SIMULATOR=$device" >> "$GITHUB_ENV"
+
+      - name: Both apps, for iPhones and for the simulator, unsigned
+        run: |
+          for scheme in Kinfold CoreTests; do
+            for destination in "generic/platform=iOS" "platform=iOS Simulator,id=$SIMULATOR"; do
+              echo "::group::$scheme for $destination"
+              xcodebuild -project spikes/ios/Kinfold.xcodeproj -scheme "$scheme" -configuration Debug \
+                -destination "$destination" -derivedDataPath "$RUNNER_TEMP/dd" CODE_SIGNING_ALLOWED=NO build
+              echo "::endgroup::"
+            done
+          done
+          ls -l "$RUNNER_TEMP"/dd/Build/Products/*/
+
+      - name: The core's tests inside the CoreTests app, in the simulator
+        run: |
+          xcrun simctl boot "$SIMULATOR" || true
+          xcrun simctl bootstatus "$SIMULATOR" -b
+          xcrun simctl install "$SIMULATOR" "$RUNNER_TEMP/dd/Build/Products/Debug-iphonesimulator/CoreTests.app"
+          log="$RUNNER_TEMP/coretests.log"
+          xcrun simctl launch --console-pty "$SIMULATOR" ca.gureet.kinfold.coretests > "$log" 2>&1 || true
+          cat "$log"
+          grep -q "\[  PASSED  \]" "$log" && ! grep -q "\[  FAILED  \]" "$log"
+
+      - name: The core check and spike 5's page inside the Kinfold app, in the simulator
+        run: |
+          xcrun simctl install "$SIMULATOR" "$RUNNER_TEMP/dd/Build/Products/Debug-iphonesimulator/Kinfold.app"
+          log="$RUNNER_TEMP/kinfold.log"
+          xcrun simctl launch --console-pty "$SIMULATOR" ca.gureet.kinfold --checks > "$log" 2>&1 || true
+          cat "$log"
+          grep -q "Both checks passed in this app." "$log"
