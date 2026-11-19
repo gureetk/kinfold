@@ -163,10 +163,12 @@ class ClientServerTest {
         val ask = bSaw.delivery { it.payload.string("t") == "sig" }
         assertEquals(EnvelopeHeader.DIRECT, ask.kind)
 
-        // B goes offline; A's alert, with notify, waits in B's inbox.
+        // B goes offline; A's alert, with notify, waits in B's inbox. If B's stream closed before the
+        // cursor covering the live-view request reached it, that record comes again, and B's replay
+        // record drops it.
         bStream.cancelAndJoin()
         a.send(circle, Payloads.sos(a.clock.now(), "start", 1, 2, 3), wake = Wake.NOTIFY)
-        assertEquals(1, b.fetchInbox())
+        assertTrue(b.fetchInbox() in 1..2)
         assertEquals("start", bSaw.delivery { it.payload.string("t") == "sos" }.payload.string("state"))
 
         // B starts again from what it kept: the same circle and head, nothing new in the inbox,

@@ -26,6 +26,15 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      # Gradle's downloads, kept from run to run so that a run asks Maven Central for little: it
+      # turns busy runners away. Gradle checks every artifact against verification-metadata.xml
+      # whether it was downloaded or kept, so a kept one can't change what a build uses.
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.gradle/caches/modules-2
+          key: gradle-${{ github.workflow }}-${{ github.job }}-${{ runner.os }}-${{ hashFiles('**/gradle/verification-metadata.xml') }}
+          restore-keys: gradle-${{ github.workflow }}-${{ github.job }}-${{ runner.os }}-
+
       - name: Gradle 9.9.1, checked against its published SHA-256
         run: |
           curl -fsSL -o "$RUNNER_TEMP/gradle.zip" https://services.gradle.org/distributions/gradle-9.9.1-bin.zip
@@ -73,6 +82,15 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
+
+      # Gradle's downloads, kept from run to run so that a run asks Maven Central for little: it
+      # turns busy runners away. Gradle checks every artifact against verification-metadata.xml
+      # whether it was downloaded or kept, so a kept one can't change what a build uses.
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.gradle/caches/modules-2
+          key: gradle-${{ github.workflow }}-${{ github.job }}-${{ runner.os }}-${{ hashFiles('**/gradle/verification-metadata.xml') }}
+          restore-keys: gradle-${{ github.workflow }}-${{ github.job }}-${{ runner.os }}-
 
       - name: Gradle 9.9.1, checked against its published SHA-256
         run: |
@@ -158,6 +176,15 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
+
+      # Gradle's downloads, kept from run to run so that a run asks Maven Central for little: it
+      # turns busy runners away. Gradle checks every artifact against verification-metadata.xml
+      # whether it was downloaded or kept, so a kept one can't change what a build uses.
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.gradle/caches/modules-2
+          key: gradle-${{ github.workflow }}-${{ github.job }}-${{ runner.os }}-${{ hashFiles('**/gradle/verification-metadata.xml') }}
+          restore-keys: gradle-${{ github.workflow }}-${{ github.job }}-${{ runner.os }}-
 
       - name: Gradle 9.9.1, checked against its published SHA-256
         run: |
