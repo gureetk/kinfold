@@ -7,9 +7,14 @@
 # client layer's tests. Needs Go, OpenSSL, curl, JDK 21, Gradle 9.9.1 and an Android SDK.
 #
 # Usage: ./test-with-server.sh [more Gradle arguments]
+#
+# KINFOLD_TEST_DIR and KINFOLD_TEST_TASKS run other tests against the same kind of server: the
+# spikes' harness, for one, with KINFOLD_TEST_DIR=../spikes KINFOLD_TEST_TASKS=:harness:test.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
+dir=$(cd "${KINFOLD_TEST_DIR:-$here}" && pwd)
+tasks=${KINFOLD_TEST_TASKS:-jvmTest}
 port=${KINFOLD_TEST_PORT:-8443}
 url="https://127.0.0.1:$port"
 work=$(mktemp -d)
@@ -48,9 +53,10 @@ done
 code=$("$work/kinfold" setup --data "$work/data" | grep -o 'KFS0[A-Za-z0-9_-]*' | head -n 1)
 [ -n "$code" ] || { echo "No setup code" >&2; exit 1; }
 
-cd "$here"
+cd "$dir"
 status=0
-gradle --console=plain jvmTest -Pkinfold.server="$url" -Pkinfold.setup="$code" -Pkinfold.cacert="$work/cert.pem" "$@" || status=$?
+# shellcheck disable=SC2086 # the tasks are words
+gradle --console=plain $tasks -Pkinfold.server="$url" -Pkinfold.setup="$code" -Pkinfold.cacert="$work/cert.pem" "$@" || status=$?
 if [ "$status" -ne 0 ]; then
     echo "The server's log:" >&2
     cat "$work/server.log" >&2
