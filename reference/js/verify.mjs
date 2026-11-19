@@ -483,8 +483,12 @@ for (const { tag, ent } of epochEntries) {
 // ---------------------------------------------------------------------------
 
 group('log rebuild (seal)');
+// Where signatures don't repeat, an entry signed again matches the vector only up to its own
+// signature at the end, so the certificates, consents and links inside it are the log's own: the
+// identities and invite groups check those signed again.
 /** Re-issue a certificate found in the log, under the identity key it names. */
 async function reissue(cert) {
+  if (!signsDeterministically) return cert.raw;
   const person = personOfAccount.get(toHex(cert.account_id));
   return K.buildDeviceCert(ikSignerFor(person, toHex(cert.ik_pub)),
     { account_id: cert.account_id, device_kind: cert.device_kind, issued_at: cert.issued_at, dsk_pub: cert.dsk_pub });
@@ -525,7 +529,7 @@ for (const [i, ent] of L.entries.entries()) {
         const commit = await K.termsCommit(X(ent.terms_salt), X(ent.terms));
         checkEq(`entry ${i} details are terms_salt ‖ terms`, ent.details_plaintext, ent.terms_salt + ent.terms);
         nb = { cert, chain: chainUpTo(dev.person, ik), bundle, invite_id: invId, terms_commit: commit,
-          consent_sig: await K.joinConsent(ikSignerFor(dev.person, ik), st.circle_id, invId, cert, bundle, commit),
+          consent_sig: signsDeterministically ? await K.joinConsent(ikSignerFor(dev.person, ik), st.circle_id, invId, cert, bundle, commit) : b.consent_sig,
           admin: b.admin, details: await reseal() };
         break;
       }
@@ -567,7 +571,9 @@ for (const [i, ent] of L.entries.entries()) {
         break;
       case K.ENTRY.ROTATE_IDENTITY: {
         const person = author.person;
-        nb = { link: await K.buildIdentityLink(X(person.account_id), ikSignerFor(person, toHex(b.link.old_ik_pub)), ikSignerFor(person, toHex(b.link.new_ik_pub))) };
+        nb = { link: signsDeterministically
+          ? await K.buildIdentityLink(X(person.account_id), ikSignerFor(person, toHex(b.link.old_ik_pub)), ikSignerFor(person, toHex(b.link.new_ik_pub)))
+          : b.link.raw };
         break;
       }
     }
