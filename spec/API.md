@@ -1,6 +1,6 @@
 # Kinfold HTTP API, version 0
 
-**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §13 and the part of §16 that a first device needs, with these gaps: it takes no `apns` registrations; the share viewer shows a position as text, not yet on the coarse map.
+**Status:** draft 0.3, November 2026. Not stable. It carries the objects of [PROTOCOL.md](PROTOCOL.md) draft 0.3 and applies the November 2026 design review. The server in `server/` implements §1 to §13 and the part of §16 that a first device needs, with one gap: the share viewer shows a position as text, not yet on the coarse map.
 **License:** [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 Section numbers written "spec §…" point into PROTOCOL.md. Where the two documents disagree about bytes, the spec wins.
