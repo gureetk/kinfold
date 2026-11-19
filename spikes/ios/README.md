@@ -21,7 +21,7 @@ License: GPL-3.0-or-later with the app-store permission, as for the rest of `spi
   cp spikes/ios/Config/Local.xcconfig.example spikes/ios/Config/Local.xcconfig
   ```
 
-  Then replace the example ID in it with yours. Xcode shows it in Settings › Accounts. Don't choose a team in Signing & Capabilities: that writes the team into the project file.
+  Then replace the example ID in it with yours. Your developer account shows it on developer.apple.com, under Account › Membership details. Don't choose a team in Signing & Capabilities: that writes the team into the project file.
 
 ## Building and running
 
