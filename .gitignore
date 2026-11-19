@@ -7,3 +7,7 @@ node_modules/
 .kotlin/
 reference/platforms/jvm/build/
 core/build/
+spikes/build/
+spikes/*/build/
+# The harness's data: keys that read the test circle
+harness-data/

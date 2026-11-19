@@ -23,6 +23,6 @@ SPDX-FileCopyrightText = "Kinfold contributors"
 SPDX-License-Identifier = "AGPL-3.0-or-later"
 
 [[annotations]]
-path = ["apps/**", "core/**"]
+path = ["apps/**", "core/**", "spikes/**"]
 SPDX-FileCopyrightText = "Kinfold contributors"
 SPDX-License-Identifier = "GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception"
