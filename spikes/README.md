@@ -92,7 +92,7 @@ KINFOLD_TEST_DIR=../spikes KINFOLD_TEST_TASKS=:harness:test ./test-with-server.s
 
 ## Spike 2's Android app
 
-`android/`, the app `ca.gureet.kinfold.spike`, so that it never collides with the real app. It runs on Android 8.0 and later, without Google Play services, in plain Android views. One screen joins the test circle with an invite from the harness, asks for what sharing needs, starts and stops sharing, tunes the stream's ping, and exports the log.
+`android/`, the app `ca.gureet.kinfold.spike`, so that it never collides with the real app. It runs on Android 10 and later, without Google Play services, in plain Android views. One screen joins the test circle with an invite from the harness, asks for what sharing needs, starts and stops sharing, tunes the stream's ping, and exports the log.
 
 **Sharing** is a foreground service of type `location`, started from the app and again after a reboot or an update of the app:
 
@@ -106,7 +106,7 @@ KINFOLD_TEST_DIR=../spikes KINFOLD_TEST_TASKS=:harness:test ./test-with-server.s
 - **Alerts** (`evt`, `sos`) show as notifications, and the app answers each with a `spike_ack` to the sender, saying when it opened and showed it and whether it came on the stream.
 - **The silence watch:** the phone grants the harness a watch of 60 minutes, for a week, and renews it after five days.
 
-Its keys sit in the app's private files, unsealed, and no backup or transfer to a new phone takes them; the real app seals them with the Keystore (plan §8). Android 8 and 9 have no TLS 1.3 of their own, so on them the app's connections use Conscrypt's, which it carries for that alone.
+Its keys sit in the app's private files, unsealed, and no backup or transfer to a new phone takes them; the real app seals them with the Keystore (plan §8).
 
 **The log** is JSON lines, a file per UTC day in the format of the harness's, exported in one file through the share sheet. Each line has `t`, the phone's trusted time, and `e`: `service`, `stream`, `engine`, `mode`, `motion`, `fix` (age, accuracy, speed, distance moved), `upload` (type, stream or HTTPS, how long it took), `keepalive` (battery, Doze, power saving, the exemption, the standby bucket, background restrictions, the network, and how late the alarm was), `live_req`, `alert`, `watch`, `doze`, `saver`, `screen`, `net`, `exit` (why Android ended the process, from Android 11), `restart`, `refused` and `failed`. Never a coordinate.
 
@@ -121,7 +121,7 @@ On each phone: install the APK (allow installing from the app that opens it), op
 
 ### Testing it
 
-The `spikes` workflow builds the app, runs its unit tests (`Motion`, `AppStorage`), and runs `android/emulator-test.sh` in Android 8.0 and 16 emulators. That script runs against a server built from `../server` and the harness: the app joins with an invite, names itself, grants the watch and shares while the emulator walks north; it answers a live-view request and acknowledges an alert, awake and then in deep Doze. Locally, with an emulator running:
+The `spikes` workflow builds the app, runs its unit tests (`Motion`, `AppStorage`), and runs `android/emulator-test.sh` in Android 10 and 16 emulators. That script runs against a server built from `../server` and the harness: the app joins with an invite, names itself, grants the watch and shares while the emulator walks north; it answers a live-view request and acknowledges an alert, awake and then in deep Doze. Locally, with an emulator running:
 
 ```sh
 adb reverse tcp:8443 tcp:8443
@@ -138,5 +138,4 @@ The script builds a test build of the app, `-Pkinfold.cacert=FILE`, which trusts
 | kotlinx-coroutines-core 1.11.0 | The harness's loops and the app's work; the version the core uses |
 | Kotlin Gradle plugin 2.4.21 (JVM) | Builds the harness, and compiles the app's Kotlin |
 | Android Gradle plugin 9.5.1 (`com.android.application`), with aapt2 | Builds the app. From Google's Maven repository, which the build asks only for Android's own groups |
-| Conscrypt 2.9.0 for Android | TLS 1.3 for the app on Android 8 and 9, which have none of their own. Used only there, for the app's connections, and never installed as a security provider |
 | kotlin-test with JUnit 4, tests only | Runs the tests |

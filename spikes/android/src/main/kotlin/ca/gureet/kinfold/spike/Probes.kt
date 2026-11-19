@@ -44,10 +44,8 @@ object Probes {
             "net" to network(context),
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) fields.add("light_doze" to pm.isDeviceLightIdleMode)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            fields.add("bucket" to context.getSystemService(UsageStatsManager::class.java).appStandbyBucket)
-            fields.add("restricted" to context.getSystemService(ActivityManager::class.java).isBackgroundRestricted)
-        }
+        fields.add("bucket" to context.getSystemService(UsageStatsManager::class.java).appStandbyBucket)
+        fields.add("restricted" to context.getSystemService(ActivityManager::class.java).isBackgroundRestricted)
         return fields.toTypedArray()
     }
 

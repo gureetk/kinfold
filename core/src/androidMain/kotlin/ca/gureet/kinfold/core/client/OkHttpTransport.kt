@@ -20,7 +20,6 @@ import okio.ByteString.Companion.toByteString
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.security.KeyStore
-import java.security.Provider
 import java.security.cert.CertificateFactory
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
@@ -35,23 +34,16 @@ import okhttp3.WebSocket as OkWebSocket
  * trusted certificates unless [trustManager] says otherwise. It follows no redirects and keeps no
  * cookies and no cache; it asks for no compression. Proxies come from the system's settings.
  *
- * Android has TLS 1.3 from version 10. Versions 8 and 9 have none, so an app that runs on them
- * passes [tlsProvider], a provider that has it, such as Conscrypt's. It serves this transport's
- * connections only: it isn't installed, so it never answers for the core's other cryptography
- * (PROTOCOL.md Appendix C). Without TLS 1.3 the constructor fails.
+ * Android has TLS 1.3 from version 10, the oldest the core supports. Without it the constructor
+ * fails.
  */
-class OkHttpTransport(
-    trustManager: X509TrustManager = systemTrust(),
-    tlsProvider: Provider? = null,
-) : Transport {
+class OkHttpTransport(trustManager: X509TrustManager = systemTrust()) : Transport {
     private val client: OkHttpClient
 
     init {
-        val context = if (tlsProvider != null) SSLContext.getInstance("TLS", tlsProvider) else SSLContext.getInstance("TLS")
+        val context = SSLContext.getInstance("TLS")
         context.init(null, arrayOf(trustManager), null)
-        check("TLSv1.3" in context.supportedSSLParameters.protocols) {
-            "no TLS 1.3 here: before Android 10 it takes a provider that has it, such as Conscrypt"
-        }
+        check("TLSv1.3" in context.supportedSSLParameters.protocols) { "no TLS 1.3 here" }
         client = OkHttpClient.Builder()
             .sslSocketFactory(context.socketFactory, trustManager)
             .connectionSpecs(listOf(ConnectionSpec.Builder(ConnectionSpec.RESTRICTED_TLS).tlsVersions(TlsVersion.TLS_1_3).build()))
@@ -230,13 +222,13 @@ class OkHttpTransport(
          * such as one started for a test. Nothing else is relaxed: the name in the certificate must
          * still match the server's.
          */
-        fun trusting(certificatePem: ByteArray, tlsProvider: Provider? = null): OkHttpTransport {
+        fun trusting(certificatePem: ByteArray): OkHttpTransport {
             val cert = CertificateFactory.getInstance("X.509").generateCertificate(certificatePem.inputStream())
             val store = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
                 load(null, null)
                 setCertificateEntry("server", cert)
             }
-            return OkHttpTransport(trustManagerOf(store), tlsProvider)
+            return OkHttpTransport(trustManagerOf(store))
         }
 
         private fun trustManagerOf(store: KeyStore?): X509TrustManager {

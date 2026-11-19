@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.location.Location
-import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
 import ca.gureet.kinfold.core.Reason
@@ -110,11 +109,7 @@ class SharingService : Service(), ClientListener {
     private fun foreground(text: String): Boolean {
         val n = Notifications.sharing(this, text)
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(Notifications.SHARING_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
-            } else {
-                startForeground(Notifications.SHARING_ID, n)
-            }
+            startForeground(Notifications.SHARING_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
             return true
         } catch (e: Exception) {
             // Without location permission Android 14 and later refuse a location service.

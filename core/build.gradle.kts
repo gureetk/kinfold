@@ -30,7 +30,8 @@ kotlin {
         namespace = "ca.gureet.kinfold.core"
         // Android 17's API, which OkHttp asks to be compiled against
         compileSdk = 37
-        minSdk = 26
+        // Android 10, the first with TLS 1.3 of its own
+        minSdk = 29
         withHostTest {}
         // The device tests run commonTest on a phone or an emulator, against the platform's own libraries.
         withDeviceTestBuilder {
@@ -91,8 +92,6 @@ kotlin {
             dependencies {
                 // Runs JUnit tests on the device
                 implementation("androidx.test:runner:1.7.0")
-                // TLS 1.3 for the client layer's test on Android 8 and 9, which have none of their own
-                implementation("org.conscrypt:conscrypt-android:2.9.0")
             }
         }
         if (onMac) {
