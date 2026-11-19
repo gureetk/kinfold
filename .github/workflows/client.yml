@@ -2,8 +2,8 @@
 name: Client
 
 # The core's client layer against a real server: the server built from server/, started with TLS
-# by core/test-with-server.sh, and the core's client test run against it on the JVM and on Android
-# emulators. A change on either side can break the other, so both start it.
+# by core/test-with-server.sh, and the core's client test run against it on the JVM, on Android
+# emulators and in the iOS simulator. A change on either side can break the other, so both start it.
 on:
   # Branches are tested through their pull requests; pushes only on main.
   push:
@@ -206,4 +206,118 @@ jobs:
                               print(f"FAILED {case.get('name')}:\n{(problem.text or problem.get('message') or '')[:4000]}")
           print(f"{ran} tests against the server on the device, {failed} failed")
           raise SystemExit(1 if failed or not ran else 0)
+          PY
+
+  # The same test on iOS, through URLSession, in the iOS simulator. The simulator's processes run
+  # on the Mac, so the test reaches the server on 127.0.0.1 directly.
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache: false
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # Gradle's downloads, kept from run to run so that a run asks Maven Central for little: it
+      # turns busy runners away. Gradle checks every artifact against verification-metadata.xml
+      # whether it was downloaded or kept, so a kept one can't change what a build uses.
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.gradle/caches/modules-2
+          key: gradle-${{ github.workflow }}-${{ github.job }}-${{ runner.os }}-${{ hashFiles('**/gradle/verification-metadata.xml') }}
+          restore-keys: gradle-${{ github.workflow }}-${{ github.job }}-${{ runner.os }}-
+
+      - name: Gradle 9.9.1, checked against its published SHA-256
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/gradle.zip" https://services.gradle.org/distributions/gradle-9.9.1-bin.zip
+          echo "d8a18a7a841dd5df825d35a685fad6f2d7f12ac0c280e57b67c27b4a520ba228  $RUNNER_TEMP/gradle.zip" | shasum -a 256 -c
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-9.9.1/bin" >> "$GITHUB_PATH"
+
+      - name: Kotlin/Native's LLVM and libffi, checked against pinned SHA-256s
+        run: core/kotlin-native-deps.sh
+
+      # The test certificate is made with OpenSSL's options; macOS's own openssl is LibreSSL.
+      - name: OpenSSL from Homebrew
+        run: |
+          openssl=$(brew --prefix openssl@3)/bin
+          "$openssl/openssl" version
+          echo "$openssl" >> "$GITHUB_PATH"
+
+      - name: The newest iOS simulator's first iPhone
+        run: |
+          device=$(xcrun simctl list devices available --json | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          ios = sorted((k for k in devices if ".iOS-" in k), key=lambda k: [int(x) for x in k.rsplit("iOS-", 1)[1].split("-")])
+          for runtime in reversed(ios):
+              for d in devices[runtime]:
+                  if d["name"].startswith("iPhone"):
+                      print(d["udid"], runtime.rsplit(".", 1)[1], d["name"], file=sys.stderr)
+                      print(d["udid"])
+                      sys.exit()
+          sys.exit("no iPhone simulator")
+          ')
+          echo "SIMULATOR=$device" >> "$GITHUB_ENV"
+
+      # Every module is checked against go.sum, whose hashes the Go checksum database vouches for.
+      - name: The server's modules
+        working-directory: server
+        run: |
+          go mod download
+          go mod verify
+
+      # The test runs inside the booted simulator, whose own services check the server's certificate.
+      - name: The client layer in the iOS simulator, against the server
+        working-directory: core
+        env:
+          KINFOLD_TEST_TASKS: iosSimulatorArm64Test
+        run: |
+          xcrun simctl boot "$SIMULATOR" || true
+          xcrun simctl bootstatus "$SIMULATOR" -b
+          log="$RUNNER_TEMP/client.log"
+          for attempt in 1 2 3 4 5; do
+            if ./test-with-server.sh --no-daemon --stacktrace -Pkinfold.simulator="$SIMULATOR" -Pkinfold.simulator.booted=true --tests '*ClientServerTest*' > "$log" 2>&1; then
+              cat "$log"
+              break
+            fi
+            cat "$log"
+            if grep -q -E "Dependency verification failed|There were failing tests|Compilation error|Kotlin compiler|didn't start|No setup code|^e: " "$log"; then exit 1; fi
+            [ "$attempt" = 5 ] && exit 1
+            sleep $((attempt * 60))
+          done
+          # Kotlin/Native can't mark a test skipped, so the test prints that it was.
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          ran = 0
+          for f in glob.glob("build/test-results/iosSimulatorArm64Test/*ClientServerTest.xml"):
+              t = ET.parse(f).getroot()
+              out = "".join(e.text or "" for e in t.iter("system-out"))
+              if "skipped:" in out:
+                  raise SystemExit("the test was skipped: " + out.strip()[:500])
+              ran += int(t.get("tests", 0)) - int(t.get("failures", 0)) - int(t.get("errors", 0))
+          print(f"{ran} tests against the server in the simulator")
+          raise SystemExit(0 if ran else 1)
+          PY
+
+      - name: Why the client test failed
+        if: failure()
+        working-directory: core
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          for f in glob.glob("build/test-results/iosSimulatorArm64Test/*.xml"):
+              for case in ET.parse(f).getroot().iter("testcase"):
+                  for problem in list(case.iter("failure")) + list(case.iter("error")):
+                      print(f"FAILED {case.get('name')}: {problem.get('message')}\n{(problem.text or '')[:4000]}")
           PY

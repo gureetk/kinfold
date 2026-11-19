@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
+import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
+import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFrameworkConfig
 import org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest
 import java.util.Base64
 
@@ -51,9 +53,17 @@ kotlin {
     }
 
     // iPhones, and the simulator on Apple silicon. iOS 17 is the oldest with CryptoKit's HPKE.
+    // Xcode links the core as KinfoldCore.xcframework: assembleKinfoldCoreReleaseXCFramework.
     if (onMac) {
-        iosArm64 { cryptoKit(sdk = "iphoneos", target = "arm64-apple-ios17.0") }
-        iosSimulatorArm64 { cryptoKit(sdk = "iphonesimulator", target = "arm64-apple-ios17.0-simulator") }
+        val xcf = XCFramework("KinfoldCore")
+        iosArm64 {
+            cryptoKit(sdk = "iphoneos", target = "arm64-apple-ios17.0")
+            coreFramework(xcf)
+        }
+        iosSimulatorArm64 {
+            cryptoKit(sdk = "iphonesimulator", target = "arm64-apple-ios17.0-simulator")
+            coreFramework(xcf)
+        }
     }
 
     compilerOptions {
@@ -118,8 +128,18 @@ tasks.withType<Test>().configureEach {
 }
 
 // The simulator to test on, by name or UDID, as -Pkinfold.simulator=...; Kotlin's default otherwise.
+// The server for the client layer's test (test-with-server.sh) goes to the test process as
+// KINFOLD_SERVER, KINFOLD_SETUP and KINFOLD_CACERT: simctl hands it the variables that start with
+// SIMCTL_CHILD_, without the prefix.
 tasks.withType<KotlinNativeSimulatorTest>().configureEach {
     providers.gradleProperty("kinfold.simulator").orNull?.let { device.set(it) }
+    // Kotlin runs the tests outside the simulator's own services by default, and then the system
+    // can't check a server's certificate. The client's test runs in a simulator booted beforehand,
+    // as part of it: -Pkinfold.simulator.booted=true.
+    if (providers.gradleProperty("kinfold.simulator.booted").orNull == "true") standalone.set(false)
+    for (name in listOf("kinfold.server", "kinfold.setup", "kinfold.cacert")) {
+        providers.gradleProperty(name).orNull?.let { environment("SIMCTL_CHILD_" + name.uppercase().replace('.', '_'), it) }
+    }
 }
 
 /**
@@ -155,6 +175,17 @@ fun KotlinNativeTarget.cryptoKit(sdk: String, target: String) {
         // The toolchain's Swift libraries, besides the SDK's, for anything the Swift object asks for.
         linkerOpts("-L${xcodeToolchain()}/usr/lib/swift/$sdk")
     }
+}
+
+/**
+ * The core as a framework for Xcode, one slice of the XCFramework [xcf]. It carries the CryptoKit
+ * layer, and Swift sees the core's public API through its Objective-C header.
+ */
+fun KotlinNativeTarget.coreFramework(xcf: XCFrameworkConfig) = binaries.framework {
+    baseName = "KinfoldCore"
+    // Kotlin can't tell the framework's bundle ID from the core's packages.
+    binaryOption("bundleId", "ca.gureet.kinfold.core")
+    xcf.add(this)
 }
 
 /** Xcode's default toolchain, from the Xcode that xcode-select names. */

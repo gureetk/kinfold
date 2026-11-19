@@ -194,19 +194,10 @@ jobs:
           echo "$RUNNER_TEMP/gradle-9.9.1/bin" >> "$GITHUB_PATH"
 
       # Kotlin/Native downloads its own LLVM and libffi and checks no hash, and JetBrains
-      # publishes none. So they are fetched here and checked against the SHA-256s below, which
-      # two runners agreed on, and Kotlin/Native finds them in its cache instead.
+      # publishes none. The script fetches them first and checks them against pinned SHA-256s, and
+      # Kotlin/Native finds them in its cache instead. The maintainer's Mac runs the same script.
       - name: Kotlin/Native's LLVM and libffi, checked against pinned SHA-256s
-        run: |
-          cache="$HOME/.konan/dependencies/cache"
-          mkdir -p "$cache"
-          fetch() {
-            file="$cache/$(basename "$2")"
-            curl -fsSL -o "$file" "https://download.jetbrains.com/kotlin/native/$2"
-            echo "$1  $file" | shasum -a 256 -c
-          }
-          fetch 62fd78f090353aa7b2c6601ad6f95bd7a0b0558b18f86978043cc878321b408a resources/llvm/21-aarch64-macos/llvm-21-aarch64-macos-essentials-97.tar.gz
-          fetch 8ca0102ad5b626e8b1699f311ab098354a90154ea3e44951f28ebdd256862ba9 libffi-3.3-1-macos-arm64.tar.gz
+        run: core/kotlin-native-deps.sh
 
       - name: Xcode and the simulator
         run: |
@@ -227,12 +218,12 @@ jobs:
           ')
           echo "SIMULATOR=$device" >> "$GITHUB_ENV"
 
-      - name: The vectors on the iOS simulator, and the test binary for iPhones
+      - name: The vectors on the iOS simulator, the test binary for iPhones, and the XCFramework
         working-directory: core
         run: |
           log="$RUNNER_TEMP/gradle.log"
           for attempt in 1 2 3 4; do
-            if gradle --no-daemon --console=plain iosSimulatorArm64Test linkDebugTestIosArm64 -Pkinfold.simulator="$SIMULATOR" > "$log" 2>&1; then
+            if gradle --no-daemon --console=plain iosSimulatorArm64Test linkDebugTestIosArm64 assembleKinfoldCoreReleaseXCFramework -Pkinfold.simulator="$SIMULATOR" > "$log" 2>&1; then
               cat "$log" | tee -a "$RUNNER_TEMP/all.log"
               break
             fi
@@ -252,6 +243,14 @@ jobs:
           print(f"{tests} tests in the simulator, {failed} failed")
           raise SystemExit(1 if failed or not tests else 0)
           PY2
+
+      - name: The XCFramework, as Xcode will see it
+        working-directory: core/build/XCFrameworks/release/KinfoldCore.xcframework
+        run: |
+          plutil -p Info.plist
+          for f in */KinfoldCore.framework; do
+            echo "$f: $(du -sh "$f" | cut -f1), $(lipo -info "$f/KinfoldCore" | sed 's/.*: //')"
+          done
 
       - name: Kotlin/Native downloaded nothing itself
         run: |
