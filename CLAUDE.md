@@ -23,7 +23,8 @@ These hold for every change, alongside [CONTRIBUTING.md](CONTRIBUTING.md), which
 
 ## Branches and pull requests
 
-- Work on a branch and open a pull request; the maintainer squash-merges. Never merge, and never push to `main`.
+- Work on a branch and open a pull request; never push to `main`.
+- Pull requests are squash-merged. Merge one yourself once CI is green, unless it needs the maintainer to test something on a device first; then wait for their result.
 - `gh pr` doesn't work in cloud sessions. Open and edit pull requests with `gh api repos/gureetk/kinfold/pulls`.
 - The CI job `vectors` must stay green.
 
