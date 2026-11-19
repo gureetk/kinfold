@@ -1232,7 +1232,7 @@ The server decides when a watch fires, so a server run by the watched person, or
 
 ### 14.2 Push messages
 
-Everything the server sends a device by any route other than the device's own connection — the iOS relay, UnifiedPush — has one format, signed by the server and sealed to the device:
+Everything the server sends a device by any route other than the device's own connection — the iOS relay, Apple directly, UnifiedPush — has one format, signed by the server and sealed to the device:
 
 ```text
 struct Push {

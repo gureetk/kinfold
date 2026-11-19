@@ -3,11 +3,12 @@
 // Package push builds what a server sends a device by any route but the device's own
 // connection (PROTOCOL.md §14.2): a Push signed with the server key, padded to 2,560 bytes
 // and sealed with HPKE to the device's current encryption key, 2,616 bytes in all. It also
-// signs requests to the iOS relay (§14.4).
+// signs requests to the iOS relay (§14.4) and wraps pushes for Apple (API.md §12).
 package push
 
 import (
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
 
 	"github.com/gureetk/kinfold/server/internal/identity"
@@ -93,4 +94,45 @@ func SilenceBody(circleID, watchedDevice []byte, lastSeenAt uint64) []byte {
 // Sign(server key, "relay-push", capability ‖ sealed ‖ u64(sent_at) ‖ u8(delivery)).
 func RelaySig(server ed25519.PrivateKey, capability, sealed []byte, sentAt uint64, delivery uint8) []byte {
 	return kcrypto.Sign(server, "relay-push", capability, sealed, wire.U64(sentAt), []byte{delivery})
+}
+
+// AppleNote is a sealed push as an Apple notification (API.md §12), the same whether the
+// relay sends it or a server with its own Apple key: the push type, what the bundle ID takes
+// as a suffix to make the topic, the priority, when Apple stops trying (UNIX seconds) and
+// the JSON payload.
+type AppleNote struct {
+	PushType    string
+	TopicSuffix string
+	Priority    int
+	Expiration  int64
+	Payload     []byte
+}
+
+// Fallback names the app's string for an alert its notification extension can't open.
+const Fallback = "push_fallback"
+
+// ForApple wraps a sealed push for Apple. An alert or a background push is kept for an hour,
+// as Web Push is; a location push for 10 minutes, past which the phone would drop it
+// (PROTOCOL.md §14.2).
+func ForApple(delivery uint8, sealed []byte, sentAt uint64) (AppleNote, error) {
+	k := wire.EncodeB64u(sealed)
+	at := int64(sentAt / 1000)
+	var n AppleNote
+	var aps map[string]any
+	switch delivery {
+	case Alert:
+		n = AppleNote{PushType: "alert", Priority: 10, Expiration: at + 3600}
+		aps = map[string]any{"alert": map[string]string{"loc-key": Fallback}, "mutable-content": 1, "sound": "default"}
+	case Background:
+		n = AppleNote{PushType: "background", Priority: 5, Expiration: at + 3600}
+		aps = map[string]any{"content-available": 1}
+	case Location:
+		n = AppleNote{PushType: "location", TopicSuffix: ".location-query", Priority: 10, Expiration: at + 600}
+		aps = map[string]any{}
+	default:
+		return n, errors.New("push: no such delivery type")
+	}
+	payload, err := json.Marshal(map[string]any{"aps": aps, "kinfold": k})
+	n.Payload = payload
+	return n, err
 }

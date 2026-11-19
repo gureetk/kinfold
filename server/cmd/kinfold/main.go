@@ -6,10 +6,12 @@
 //	              [--tls-cert FILE --tls-key FILE] [--trusted-proxy ADDRESS,…] [--no-clock-check]
 //	              [--relay https://relay.example] [--push-hosts HOST,…] [--push-hosts-only]
 //	              [--no-webpush] [--search http://127.0.0.1:2322]
+//	              [--apple-team TEAM_ID --apple-app BUNDLE_ID [--apple-sandbox FILE] [--apple-production FILE]]
 //
 // serve keeps everything in DIR: the server key (server.key), the Web Push key (vapid.key),
 // the database (kinfold.db, with its -wal and -shm files), the map files (tiles/) and the
-// admin socket (admin.sock).
+// admin socket (admin.sock). Apple push keys, for an iOS app the family builds itself, stay
+// where the operator keeps them.
 //
 //	kinfold setup [--expires 24h]                 print a setup code for the first phone
 //	kinfold token create [--expires 168h]         a registration token
@@ -55,6 +57,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -63,6 +66,7 @@ import (
 
 	"github.com/gureetk/kinfold/server/internal/admin"
 	"github.com/gureetk/kinfold/server/internal/api"
+	"github.com/gureetk/kinfold/server/internal/apns"
 	"github.com/gureetk/kinfold/server/internal/clock"
 	"github.com/gureetk/kinfold/server/internal/qr"
 	"github.com/gureetk/kinfold/server/internal/store"
@@ -118,6 +122,10 @@ func serve(args []string) error {
 	pushHostsOnly := fs.Bool("push-hosts-only", false, "send Web Push only to the hosts in --push-hosts")
 	noWebPush := fs.Bool("no-webpush", false, "take no Web Push (UnifiedPush) registrations; Android phones then rely on their stream")
 	search := fs.String("search", "", "the search add-on: a Photon instance's base URL, such as http://127.0.0.1:2322; without it, no search")
+	appleTeam := fs.String("apple-team", "", "your Apple developer team ID, to push to an iOS app you build yourself (API.md §12)")
+	appleApp := fs.String("apple-app", "", "that app's bundle ID, such as ca.gureet.kinfold")
+	appleSandbox := fs.String("apple-sandbox", "", "an Apple push key for builds run from Xcode: the .p8 file, named AuthKey_KEYID.p8 as Apple names it")
+	appleProduction := fs.String("apple-production", "", "an Apple push key for TestFlight and App Store builds, named as for --apple-sandbox")
 	fs.Parse(args)
 	privateFiles()
 	if !strings.HasPrefix(*url, "https://") || strings.HasSuffix(*url, "/") {
@@ -137,6 +145,10 @@ func serve(args []string) error {
 		}
 	}
 	proxies, err := parseProxies(*trustedProxy)
+	if err != nil {
+		return err
+	}
+	apple, err := loadApple(*appleTeam, *appleApp, *appleSandbox, *appleProduction)
 	if err != nil {
 		return err
 	}
@@ -171,7 +183,7 @@ func serve(args []string) error {
 	}
 	clk := clock.System{CheckSync: !*noClock}
 	handler := api.New(api.Config{URL: *url, Key: key, Clock: clk, Store: st, Tiles: library, Search: *search, DataDir: *data, Limits: limits,
-		Push: api.PushConfig{Relay: *relay, Hosts: hosts, HostsOnly: *pushHostsOnly, VAPID: vapid}, TrustedProxies: proxies})
+		Push: api.PushConfig{Relay: *relay, Hosts: hosts, HostsOnly: *pushHostsOnly, VAPID: vapid, Apple: apple}, TrustedProxies: proxies})
 
 	srv := &http.Server{Addr: *listen, Handler: handler,
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second,
@@ -323,6 +335,61 @@ func loadVAPID(path string) (*ecdsa.PrivateKey, error) {
 		return nil, fmt.Errorf("%s is not a VAPID key", path)
 	}
 	return k, nil
+}
+
+// loadApple reads the server's own Apple push keys, if it has any (API.md §12): each a .p8
+// file under the name Apple gives it, AuthKey_<key ID>.p8, where the key ID comes from.
+func loadApple(team, app, sandbox, production string) (api.AppleConfig, error) {
+	cfg := api.AppleConfig{BundleID: app, Keys: map[string]apns.Key{}}
+	for _, k := range []struct{ env, path string }{{"sandbox", sandbox}, {"production", production}} {
+		if k.path == "" {
+			continue
+		}
+		name := "--apple-" + k.env
+		id, named := strings.CutPrefix(filepath.Base(k.path), "AuthKey_")
+		id, p8 := strings.CutSuffix(id, ".p8")
+		if !named || !p8 || !apns.AppleID(id) {
+			return cfg, fmt.Errorf("%s: keep the name Apple gave the key, AuthKey_<key ID>.p8; the server takes the key ID from it", name)
+		}
+		raw, err := os.ReadFile(k.path)
+		if err != nil {
+			return cfg, fmt.Errorf("%s: %w", name, err)
+		}
+		key, err := apns.ParseKey(raw)
+		if err != nil {
+			return cfg, fmt.Errorf("%s: %w", name, err)
+		}
+		if fi, err := os.Stat(k.path); err == nil && runtime.GOOS != "windows" && fi.Mode().Perm()&0o077 != 0 {
+			slog.Warn("other users can read this Apple push key; make it readable only by the server's user", "flag", name)
+		}
+		cfg.Keys[k.env] = apns.Key{ID: id, Team: team, Private: key}
+	}
+	switch {
+	case len(cfg.Keys) == 0 && (team != "" || app != ""):
+		return cfg, errors.New("--apple-team and --apple-app go with --apple-sandbox, --apple-production or both")
+	case len(cfg.Keys) == 0:
+		return api.AppleConfig{}, nil
+	case !apns.AppleID(team):
+		return cfg, errors.New("--apple-team is your team's 10-character ID, from the membership details of your Apple developer account")
+	case !bundleID(app):
+		return cfg, errors.New("--apple-app is the bundle ID of the iOS app you build, such as ca.gureet.kinfold")
+	}
+	return cfg, nil
+}
+
+// bundleID says whether s can be an app's bundle ID: letters, digits, hyphens and periods,
+// in two or more parts, at most 255 bytes.
+func bundleID(s string) bool {
+	parts := strings.Split(s, ".")
+	if len(s) > 255 || len(parts) < 2 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" || strings.Trim(p, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-") != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // restore puts a backup in place in a data directory while the server is stopped, and starts
@@ -618,6 +685,15 @@ func adminCommand(cmd string, args []string) error {
 		fmt.Printf("streams open: %v, pushes in flight: %v, link mailboxes: %v\n", out["streams"], out["pushes_in_flight"], out["link_mailboxes"])
 		if r, ok := out["relay_reachable"].(bool); ok {
 			fmt.Printf("relay reachable: %v\n", r)
+		}
+		apple, _ := out["apple"].([]any)
+		for _, a := range apple {
+			k, _ := a.(map[string]any)
+			last := "no push yet"
+			if answer, ok := k["last_answer"].(string); ok {
+				last = "last push " + when(k["last_at"]) + ", " + answer
+			}
+			fmt.Printf("Apple %v key %v: %s\n", k["environment"], k["key_id"], last)
 		}
 		fmt.Printf("repair mode until: %v\nlast backup: %v\n", when(out["repair_until"]), when(out["last_backup_at"]))
 	case cmd == "accounts" && len(sub) == 0:

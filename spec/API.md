@@ -136,14 +136,16 @@ Default rate limits. The operator can change them (`kinfold limits`, §16); clie
   "features": ["tiles", "search", "web_devices", "webpush", "relay", "member_tokens", "stream_post"],
   "relay": "https://push.example.org",
   "vapid_key": "<P-256 public key, base64url>",
+  "apns": {"bundle_id": "org.example.kinfold", "environments": ["sandbox"]},
   "repair": false,
   "move": "<ServerMove, base64url>"
 }
 ```
 
 - `server_info` is the only signed part. A client checks it against the server key it trusts before believing anything else (spec §13.1).
-- `features` lists what the operator has switched on. `tiles` means the server offers at least one map region and `search` that the search add-on is installed (§13); `web_devices` means direction-2 linking is available (§10); `member_tokens` means admins can mint registration tokens with invites (§9); `stream_post` means devices may upload envelopes over the stream (§7); `web_tile_ranges` means web devices may read map regions in parts (§13); `apns` may appear on a server that holds its own Apple key (§12).
+- `features` lists what the operator has switched on. `tiles` means the server offers at least one map region and `search` that the search add-on is installed (§13); `web_devices` means direction-2 linking is available (§10); `member_tokens` means admins can mint registration tokens with invites (§9); `stream_post` means devices may upload envelopes over the stream (§7); `web_tile_ranges` means web devices may read map regions in parts (§13); `apns` means the server holds its own Apple keys (§12).
 - `relay` is the iOS relay this server sends through. An app whose built-in relay differs warns the person that pushes won't arrive.
+- `apns` is present with the `apns` feature: the bundle ID of the iOS app the server's Apple keys reach, and the environments it holds keys for. An app whose own bundle ID and environment are listed registers `apns`; an App Store app otherwise registers `relay`.
 - `vapid_key` is present with `webpush`. The app hands it to its UnifiedPush distributor. It lasts as long as the server's data; an app that sees a different one subscribes again with it and sends the new registration (§12).
 - `move` is present while a move is announced (spec §13.3), at the old address and the new one, for at least 90 days.
 
@@ -381,12 +383,12 @@ A device with an open stream needs no push. Android phones keep a stream by defa
 ```json
 {"kind": "relay",   "notify": "<capability>", "locate": "<capability>"}
 {"kind": "webpush", "endpoint": "https://…", "p256dh": "<key>", "auth": "<secret>"}
-{"kind": "apns",    "notify": "<token>", "locate": "<token>", "environment": "production"}
+{"kind": "apns",    "notify": "<token>", "locate": "<token>", "environment": "sandbox"}
 ```
 
 - **`relay`** is the App Store build's route. The capabilities come from the relay (§14), as base64url. `locate` is present when the app has Apple's location-push entitlement and the person has allowed location all the time. A server with no relay configured refuses it (403).
 - **`webpush`** is UnifiedPush. The server sends the sealed push as a Web Push message (RFC 8030) of one record, encrypted to `p256dh` and `auth` (RFC 8291) and signed with its VAPID key (RFC 8292). The VAPID token's audience is the endpoint's origin, it expires within 12 hours, and its subject is the server's URL, so the push host learns that URL. RFC 8292 makes the subject optional, but Mozilla's push service, which the Sunup distributor uses, refuses a token without one. A server without a VAPID key refuses it (403).
-- **`apns`** exists only on a server that holds its own Apple key, for families who build the iOS app themselves; any other server refuses it (403).
+- **`apns`** is for families who build the iOS app themselves: the server holds its own Apple keys and sends to Apple directly. `notify` and `locate` are Apple's tokens, as base64url, at most 256 bytes each; `locate` is present as for `relay`. `environment` is `sandbox` for an app built and run from Xcode and `production` for TestFlight and App Store builds, since Apple's tokens belong to one or the other. A server with no Apple key refuses the registration (403), and so does one without a key for its environment.
 - **Who.** Any receiving device (403 for a recovery device). A registration that breaks a rule here, or the rules for push addresses below, is 400.
 
 **What is sent.** Always the sealed, signed, fixed-size push of spec §14.2, and nothing else, sealed to the newest current key bundle the server knows for the device: the one it registered with, or a later one in a circle's log. A device with a stream open gets no push, and neither does one registered for a route the operator has since switched off; the discovery document (§4) shows which routes are on. For an envelope uploaded with `Kinfold-Wake`, the server sends a `records` push when the delivery record fits in one, otherwise a `wake` push, and the device fetches its inbox. An upload whose wake-up is past its limit (§3) is refused whole, with 429, and nothing is stored. Every Web Push request uses the same `TTL` (3,600) and `Urgency` (`high`), so a distributor can't tell an alert from a wake-up.
@@ -400,6 +402,21 @@ A device with an open stream needs no push. Android phones keep a stream by defa
 | location | `locate`; the wake-up before a silence alert | The location-push extension reads the position and uploads it |
 
 The relay and Apple see the delivery type. Neither sees what kind of alert it is.
+
+**The Apple notification.** The relay (§14) and a server with its own Apple key send Apple the same notification for each delivery type, with the app's bundle ID as the topic:
+
+| Delivery | `apns-push-type` | `apns-topic` | `apns-priority` | `apns-expiration` | Payload |
+| --- | --- | --- | --- | --- | --- |
+| alert | `alert` | the bundle ID | 10 | `sent_at` + 1 hour | `{"aps":{"alert":{"loc-key":"push_fallback"},"mutable-content":1,"sound":"default"},"kinfold":"…"}` |
+| background | `background` | the bundle ID | 5 | `sent_at` + 1 hour | `{"aps":{"content-available":1},"kinfold":"…"}` |
+| location | `location` | the bundle ID and `.location-query` | 10 | `sent_at` + 10 minutes | `{"aps":{},"kinfold":"…"}` |
+
+- `kinfold` is the sealed push of spec §14.2, as base64url: 3,488 characters, so every payload is well inside Apple's 4,096 bytes. The keys are in this order and the JSON has no spaces.
+- `apns-expiration` is in seconds. Apple keeps trying to deliver an alert or a background push for an hour, as Web Push hosts do, and a location push for 10 minutes, after which the phone would drop it (spec §14.2).
+- `push_fallback` names a string in the app: the text a phone shows when its notification extension can't open the push. It is in the phone's language, and it is the same for every alert.
+- Apple refuses a background push at priority 10, and takes location pushes only from servers that authenticate with a key's tokens rather than a certificate.
+
+**Apple's answers.** A server with its own Apple key authenticates with an ES256 token made with the key, renewed every 40 minutes, over HTTP/2. A 410 from Apple, or a 400 with `BadDeviceToken` or `DeviceTokenNotForTopic`, ends the registration as a 410 from the relay does. Apple says not to retry those; they mean the token has gone or isn't one of this app's. Any other refusal leaves the registration alone and is logged with its status, reason, environment and push type, never the token. A 403 usually means the operator's key, team ID or bundle ID is wrong, and the operator's status shows Apple's last answer for each key (§16).
 
 **Rules for push addresses.** A `webpush` endpoint is a URL chosen by the phone, so without rules any member could aim the server at its own network.
 
@@ -456,7 +473,7 @@ The relay is a separate small service run by the project (spec §14.4). It has t
 | `POST /v1/push` | A family's server | `{"capability", "sealed", "sent_at", "delivery", "sig"}` | 202 |
 
 - **Registering.** `token` is the Apple device token; `kind` is `notify` or `locate`. The capability is the token, its kind and `server_key`, sealed under a key only the relay holds. An app registers again whenever Apple gives it a new token or it moves to another server.
-- **Pushing.** `sig` is `relay_sig` of spec §14.4, made with the server key inside the capability; `sent_at` must be within five minutes; `delivery` is `alert`, `background` or `location` and must suit the capability's kind. The relay wraps the sealed push in an Apple notification of that type and forwards it. Every alert it sends looks the same.
+- **Pushing.** `sig` is `relay_sig` of spec §14.4, made with the server key inside the capability; `sent_at` must be within five minutes; `delivery` is `alert`, `background` or `location` and must suit the capability's kind. The relay wraps the sealed push in the Apple notification of §12 for that type and forwards it. Every alert it sends looks the same.
 - **Answers.** 202 when Apple accepted the push. 410 when Apple reports the token dead: the server drops the registration. 429 with `Retry-After` when a capability or a server key is sending too much.
 - **What it sees.** Which server key wakes which Apple token, when, and with which delivery type. It never sees content, circles, accounts or addresses of families' servers beyond the connection itself, and it logs none of it.
 
@@ -503,7 +520,7 @@ Administration is a separate API on a Unix socket that file permissions protect.
 | Backup and restore | Back up; restore, which starts the server in repair mode; end repair mode; show each circle's head while phones repair it |
 | Maps and search | Add, update and remove regions; build the coarse archive; manage the search index |
 | Server key | Show the fingerprint; announce a move (spec §13.3); replace the key |
-| Health | Clock state, disk, queue sizes, last backup, relay reachability |
+| Health | Clock state, disk, queue sizes, last backup, relay reachability, Apple's last answer |
 
 Removing a device on the server cuts off its sessions and deliveries at once. It doesn't change any circle's log, so phones keep encrypting to it until a member removes it there. It is the emergency step when the only admin's only phone is gone and there is no recovery kit.
 
@@ -526,7 +543,7 @@ The web console adds its own protections, since a console on `localhost` is a kn
 | `GET /circles` | `kinfold circles` | Every circle, closed ones too: its ID, how many members and devices it has, the length of its log, its head and the day it was made. While phones repair after a restore, the head shows how far each circle has come |
 | `POST /backup` | `kinfold backup FILE` | `{"file"}`, which must not exist yet: a tar archive of a snapshot of the database, taken while the server runs, and the server's keys (`server.key`, and `vapid.key` if there is one). Map files are left out. The archive is as secret as the server key. Records `last_backup_at` |
 | — | `kinfold restore FILE` | With the server stopped: reads the archive, brings its database to this server's schema and starts repair mode (§6) in it, for 72 hours or `--hours`, and only then puts the database and keys in place. An archive that isn't a backup, or whose database this server can't read, changes nothing |
-| `GET /status` | `kinfold status` | The server key's fingerprint, uptime, whether the clock is synchronized, free disk, open streams, pushes in flight, link mailboxes, whether the relay answers, repair mode and the last backup |
+| `GET /status` | `kinfold status` | The server key's fingerprint, uptime, whether the clock is synchronized, free disk, open streams, pushes in flight, link mailboxes, whether the relay answers, Apple's last answer for each of the server's Apple keys, repair mode and the last backup |
 | `GET /regions`, `PUT /regions/{id}`, `DELETE /regions/{id}` | `kinfold region list\|add ID FILE [--name NAME]\|remove ID` | Map regions (§13). `PUT` takes `{"file", "name"}`: the server copies the file in, checks that it is a PMTiles version 3 archive, and keeps it under its SHA-256, so a file never changes under a download |
 | `PUT /coarse`, `DELETE /coarse` | `kinfold coarse set FILE\|remove` | The coarse archive (§13), refused if it goes past zoom 13 |
 

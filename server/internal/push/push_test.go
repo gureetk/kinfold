@@ -130,3 +130,35 @@ func TestBuildRefusesBodiesThatDontFit(t *testing.T) {
 		t.Error("silence body length")
 	}
 }
+
+// The Apple notification (API.md §12): the payload exactly as the API writes it, within
+// Apple's 4,096 bytes for a full-size sealed push, and the headers' values for each delivery.
+func TestForApple(t *testing.T) {
+	sealed := bytes.Repeat([]byte{0xfb}, push.SealedLen)
+	k := wire.EncodeB64u(sealed)
+	const sentAt = 1794000000123
+	for _, c := range []struct {
+		delivery         uint8
+		pushType, suffix string
+		priority         int
+		expiration       int64
+		payload          string
+	}{
+		{push.Alert, "alert", "", 10, 1794003600,
+			`{"aps":{"alert":{"loc-key":"push_fallback"},"mutable-content":1,"sound":"default"},"kinfold":"` + k + `"}`},
+		{push.Background, "background", "", 5, 1794003600, `{"aps":{"content-available":1},"kinfold":"` + k + `"}`},
+		{push.Location, "location", ".location-query", 10, 1794000600, `{"aps":{},"kinfold":"` + k + `"}`},
+	} {
+		n, err := push.ForApple(c.delivery, sealed, sentAt)
+		if err != nil || n.PushType != c.pushType || n.TopicSuffix != c.suffix || n.Priority != c.priority ||
+			n.Expiration != c.expiration || string(n.Payload) != c.payload {
+			t.Errorf("%s: %+v %v", c.pushType, n, err)
+		}
+		if len(n.Payload) > 4096 {
+			t.Errorf("%s: %d bytes", c.pushType, len(n.Payload))
+		}
+	}
+	if _, err := push.ForApple(0, sealed, sentAt); err == nil {
+		t.Error("delivery 0 wrapped")
+	}
+}

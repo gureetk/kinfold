@@ -530,8 +530,10 @@ func shares(t *testing.T, s store.Store) {
 func pushes(t *testing.T, s store.Store) {
 	relay := store.PushReg{Device: id(1), Kind: "relay", Notify: []byte("notify"), Locate: []byte("locate")}
 	web := store.PushReg{Device: id(2), Kind: "webpush", Endpoint: "https://push.example/x", P256dh: id(3), Auth: id(4)}
+	apple := store.PushReg{Device: id(5), Kind: "apns", Notify: []byte("token"), Environment: "sandbox"}
 	update(t, s, func(tx store.Tx) error {
 		must(t, tx.PutPush(relay))
+		must(t, tx.PutPush(apple))
 		return tx.PutPush(web)
 	})
 	view(t, s, func(tx store.Tx) error {
@@ -540,6 +542,9 @@ func pushes(t *testing.T, s store.Store) {
 		}
 		if got, err := tx.Push(id(2)); err != nil || !reflect.DeepEqual(got, web) {
 			t.Errorf("webpush registration: %+v %v", got, err)
+		}
+		if got, err := tx.Push(id(5)); err != nil || !reflect.DeepEqual(got, apple) {
+			t.Errorf("apns registration: %+v %v", got, err)
 		}
 		return nil
 	})

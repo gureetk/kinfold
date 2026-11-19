@@ -167,13 +167,15 @@ type Share struct {
 // PushReg is a device's push registration (API.md §12): one per device.
 type PushReg struct {
 	Device []byte
-	Kind   string // "relay" or "webpush"; "dropped" once the push host has said it is dead
+	Kind   string // "relay", "webpush" or "apns"; "dropped" once the push host has said it is dead
 	// relay: the capabilities for alert and background pushes, and for location pushes
-	// (nil without the entitlement).
+	// (nil without the entitlement). apns: Apple's tokens for the same.
 	Notify, Locate []byte
 	// webpush: the endpoint and the subscription's keys (RFC 8291).
 	Endpoint     string
 	P256dh, Auth []byte
+	// apns: "sandbox" or "production", the Apple environment the tokens belong to.
+	Environment string
 }
 
 // Tx is a transaction.

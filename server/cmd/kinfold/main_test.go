@@ -5,7 +5,12 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"net/http"
@@ -155,6 +160,48 @@ func TestParseProxies(t *testing.T) {
 	for _, bad := range []string{"localhost", "127.0.0.1:80", "fe80::1%eth0", "10.0.0.0/33", "0.0.0.0/0", "::/0", "::ffff:0.0.0.0/96"} {
 		if _, err := parseProxies(bad); err == nil {
 			t.Errorf("%s accepted", bad)
+		}
+	}
+}
+
+// Apple push keys come from .p8 files under the names Apple gives them, with a team ID and a
+// bundle ID; anything less is refused before the server starts.
+func TestLoadApple(t *testing.T) {
+	dir := t.TempDir()
+	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	der, _ := x509.MarshalPKCS8PrivateKey(k)
+	p8 := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	write := func(name string, b []byte) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	sandbox, production := write("AuthKey_ABC123DEFG.p8", p8), write("AuthKey_XYZ987WVUT.p8", p8)
+	renamed, notKey := write("apple.p8", p8), write("AuthKey_BAD0000000.p8", []byte("not a key"))
+
+	cfg, err := loadApple("TEAM123456", "ca.gureet.kinfold", sandbox, production)
+	if err != nil || cfg.BundleID != "ca.gureet.kinfold" || len(cfg.Keys) != 2 || cfg.Keys["sandbox"].ID != "ABC123DEFG" ||
+		cfg.Keys["production"].ID != "XYZ987WVUT" || cfg.Keys["sandbox"].Team != "TEAM123456" || !cfg.Keys["sandbox"].Private.Equal(k) {
+		t.Fatalf("two keys: %+v %v", cfg, err)
+	}
+	if cfg, err := loadApple("", "", "", ""); err != nil || len(cfg.Keys) != 0 {
+		t.Fatalf("no keys: %+v %v", cfg, err)
+	}
+	for name, args := range map[string][4]string{
+		"renamed":           {"TEAM123456", "ca.gureet.kinfold", renamed, ""},
+		"not a key":         {"TEAM123456", "ca.gureet.kinfold", notKey, ""},
+		"missing":           {"TEAM123456", "ca.gureet.kinfold", filepath.Join(dir, "AuthKey_NONE000000.p8"), ""},
+		"no team":           {"", "ca.gureet.kinfold", sandbox, ""},
+		"a short team":      {"TEAM12345", "ca.gureet.kinfold", "", production},
+		"no bundle ID":      {"TEAM123456", "", sandbox, ""},
+		"one-part bundle":   {"TEAM123456", "kinfold", sandbox, ""},
+		"a bundle with a /": {"TEAM123456", "ca.gureet/kinfold", sandbox, ""},
+		"a team, no key":    {"TEAM123456", "ca.gureet.kinfold", "", ""},
+	} {
+		if _, err := loadApple(args[0], args[1], args[2], args[3]); err == nil {
+			t.Errorf("%s: loaded", name)
 		}
 	}
 }
