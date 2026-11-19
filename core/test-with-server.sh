@@ -10,6 +10,8 @@
 #
 # KINFOLD_TEST_DIR and KINFOLD_TEST_TASKS run other tests against the same kind of server: the
 # spikes' harness, for one, with KINFOLD_TEST_DIR=../spikes KINFOLD_TEST_TASKS=:harness:test.
+# KINFOLD_TEST_CMD runs a command instead of Gradle, in KINFOLD_TEST_DIR, with the server's URL,
+# the setup code and the certificate's file in KINFOLD_SERVER, KINFOLD_SETUP and KINFOLD_CACERT.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -55,8 +57,12 @@ code=$("$work/kinfold" setup --data "$work/data" | grep -o 'KFS0[A-Za-z0-9_-]*' 
 
 cd "$dir"
 status=0
-# shellcheck disable=SC2086 # the tasks are words
-gradle --console=plain $tasks -Pkinfold.server="$url" -Pkinfold.setup="$code" -Pkinfold.cacert="$work/cert.pem" "$@" || status=$?
+if [ -n "${KINFOLD_TEST_CMD:-}" ]; then
+    KINFOLD_SERVER="$url" KINFOLD_SETUP="$code" KINFOLD_CACERT="$work/cert.pem" "$KINFOLD_TEST_CMD" "$@" || status=$?
+else
+    # shellcheck disable=SC2086 # the tasks are words
+    gradle --console=plain $tasks -Pkinfold.server="$url" -Pkinfold.setup="$code" -Pkinfold.cacert="$work/cert.pem" "$@" || status=$?
+fi
 if [ "$status" -ne 0 ]; then
     echo "The server's log:" >&2
     cat "$work/server.log" >&2
