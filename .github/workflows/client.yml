@@ -277,14 +277,17 @@ jobs:
           go mod download
           go mod verify
 
+      # The test runs inside the booted simulator, whose own services check the server's certificate.
       - name: The client layer in the iOS simulator, against the server
         working-directory: core
         env:
           KINFOLD_TEST_TASKS: iosSimulatorArm64Test
         run: |
+          xcrun simctl boot "$SIMULATOR" || true
+          xcrun simctl bootstatus "$SIMULATOR" -b
           log="$RUNNER_TEMP/client.log"
           for attempt in 1 2 3 4 5; do
-            if ./test-with-server.sh --no-daemon --stacktrace -Pkinfold.simulator="$SIMULATOR" --tests '*ClientServerTest*' > "$log" 2>&1; then
+            if ./test-with-server.sh --no-daemon --stacktrace -Pkinfold.simulator="$SIMULATOR" -Pkinfold.simulator.booted=true --tests '*ClientServerTest*' > "$log" 2>&1; then
               cat "$log"
               break
             fi

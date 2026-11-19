@@ -42,9 +42,10 @@ adb reverse tcp:8443 tcp:8443 && KINFOLD_TEST_TASKS=connectedAndroidDeviceTest .
     -Pandroid.testInstrumentationRunnerArguments.class=ca.gureet.kinfold.core.ClientServerTest
                                     # the client's test on the phone or emulator adb sees, through OkHttp, with the
                                     # device's 127.0.0.1:8443 forwarded to the server on this computer
-KINFOLD_TEST_TASKS=iosSimulatorArm64Test ./test-with-server.sh --tests '*ClientServerTest*'
-                                    # on the Mac, with Homebrew's OpenSSL first on the PATH: the client's test in
-                                    # the simulator, through URLSession
+xcrun simctl boot "iPhone 17 Pro" && KINFOLD_TEST_TASKS=iosSimulatorArm64Test ./test-with-server.sh \
+    -Pkinfold.simulator="iPhone 17 Pro" -Pkinfold.simulator.booted=true --tests '*ClientServerTest*'
+                                    # on the Mac, with Homebrew's OpenSSL first on the PATH: the client's test in the
+                                    # booted simulator, through URLSession; the simulator's services check the certificate
 ```
 
 The client's test against a server (`ClientServerTest`, in `commonTest`) runs only through `test-with-server.sh`, which passes the server's URL, a setup code and its certificate as the Gradle properties `kinfold.server`, `kinfold.setup` and `kinfold.cacert`. The build hands them to the JVM tests as system properties, to the Android device tests as instrumentation arguments, and to the iOS simulator's test process as environment variables; without them the test is skipped. CI runs it in the `client` workflow, for changes to the core or the server: on the JVM, in Android 10 and 16 emulators, and in the iOS simulator.

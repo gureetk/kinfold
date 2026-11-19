@@ -133,6 +133,10 @@ tasks.withType<Test>().configureEach {
 // SIMCTL_CHILD_, without the prefix.
 tasks.withType<KotlinNativeSimulatorTest>().configureEach {
     providers.gradleProperty("kinfold.simulator").orNull?.let { device.set(it) }
+    // Kotlin runs the tests outside the simulator's own services by default, and then the system
+    // can't check a server's certificate. The client's test runs in a simulator booted beforehand,
+    // as part of it: -Pkinfold.simulator.booted=true.
+    if (providers.gradleProperty("kinfold.simulator.booted").orNull == "true") standalone.set(false)
     for (name in listOf("kinfold.server", "kinfold.setup", "kinfold.cacert")) {
         providers.gradleProperty(name).orNull?.let { environment("SIMCTL_CHILD_" + name.uppercase().replace('.', '_'), it) }
     }
