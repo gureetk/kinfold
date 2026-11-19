@@ -2,7 +2,7 @@
 
 A free, self-hosted family location app: native Android and iOS apps and a small Go server, with end-to-end encryption, so the server that relays your family's locations can't read them. Built to feel familiar to people coming from Life360.
 
-> **Status: Phase 1 has begun.** The protocol spec (draft 0.3), the HTTP API draft, test vectors and three implementations that agree on them are here, along with a server that answers the API's accounts, member logs, envelopes, live stream, silence watches, invites, device linking, share links, push through the iOS relay and Web Push, map regions and address search, and keeps its data in SQLite. The shared Kotlin core passes every vector group on the JVM and on Android: the encoding, the platform cryptography behind the spec's byte checks, identities, the member log, envelopes, payloads, invites, device linking, recovery kits, safety codes, share links, the server's identity and login, silence-watch grants and pushes. Its iOS target, the rest of the server and the apps don't exist yet.
+> **Status: Phase 1 has begun.** The protocol spec (draft 0.3), the HTTP API draft, test vectors and three implementations that agree on them are here, along with a server that answers the API: accounts, member logs, envelopes, the live stream, silence watches, invites, device linking, share links, push (through the iOS relay, through Web Push, or straight to Apple with the server's own key), map regions and address search, keeping its data in SQLite. The shared Kotlin core passes every vector group on the JVM, on Android and in the iOS simulator: the encoding, the platform cryptography behind the spec's byte checks, identities, the member log, envelopes, payloads, invites, device linking, recovery kits, safety codes, share links, the server's identity and login, silence-watch grants and pushes. The apps, the iOS relay itself and the web companion don't exist yet; Phase 1's spikes come next.
 >
 > Not affiliated with other apps that use the name Kinfold.
 
@@ -18,7 +18,7 @@ A free, self-hosted family location app: native Android and iOS apps and a small
 | [`reference/go/`](reference/go/) | Go standard-library checker for everything a server enforces (public mode); the seed of the server's protocol package | Apache-2.0 |
 | [`reference/platforms/`](reference/platforms/) | The Ed25519 edge cases run through platform libraries: the JDK, Tink, Conscrypt and Bouncy Castle (in CI), and CryptoKit (a script for a Mac) | Apache-2.0 |
 | [`server/`](server/) | Go server (Phase 1): so far, the protocol's public rules and the HTTP API for accounts, member logs, envelopes, the stream, silence watches, invites, device linking, share links, push, map regions and search | AGPL-3.0-or-later |
-| `apps/android`, `apps/ios`, `core/` | Apps and the shared Kotlin Multiplatform core — Phase 1 | GPL-3.0-or-later with an app-store permission (draft) |
+| [`core/`](core/), `apps/android`, `apps/ios` | The shared Kotlin Multiplatform core, for the JVM, Android and iOS; the apps are still to come | GPL-3.0-or-later with an app-store permission (draft) |
 
 Full license texts are in [`LICENSES/`](LICENSES/); [`REUSE.toml`](REUSE.toml) maps every path to its license. The app-store permission is a draft awaiting legal review.
 
