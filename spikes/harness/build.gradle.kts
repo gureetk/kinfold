@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
 plugins {
-    kotlin("jvm") version "2.4.21"
+    kotlin("jvm")
     application
 }
 

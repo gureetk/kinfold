@@ -25,7 +25,8 @@ import kotlin.system.exitProcess
 private const val USAGE = """kinfold-harness: the other family member for Kinfold's spikes
 
   kinfold-harness setup CODE [--circle NAME]   set up from a setup code (kinfold setup) and create the test circle
-  kinfold-harness invite [--valid 24h] [--wait] print an invite code for a phone; --wait lets the phone in here
+  kinfold-harness invite [--valid 24h] [--wait] print an invite code for a phone, while run runs or not;
+                                                --wait lets the phone in here, only when run isn't running
   kinfold-harness run [options]                 stay in the circle: let phones in, register their watches, ask for
                                                 their location and send alerts on a schedule, and log what happens
       --locate-every 30m   live-view requests to each phone, with locate (0 for none)
@@ -137,7 +138,8 @@ private suspend fun loaded(data: Path): Pair<Client, Bytes> {
 
 private suspend fun invite(data: Path, args: Args) {
     val (client, circle) = loaded(data)
-    client.start()
+    // Not start(): a running `run` keeps the circle's log, and two processes mustn't both write it.
+    client.checkServer()
     val validMs = args.duration("valid", 86_400_000L)
     val name = client.state(circle)?.name ?: "Spikes"
     val pending = client.invite(circle, name, "Kinfold harness", validMs.toULong())
@@ -172,7 +174,7 @@ private suspend fun run(data: Path, args: Args) {
 
 private suspend fun status(data: Path) {
     val (client, circle) = loaded(data)
-    client.start()
+    client.checkServer()
     val state = client.state(circle) ?: fail("not in the circle")
     println("Server ${client.serverUrl}, circle ${id(circle)} \"${state.name}\" at entry ${state.seq}, epoch ${state.epoch}.")
     println("This device: ${id(client.keys.deviceId)}")
