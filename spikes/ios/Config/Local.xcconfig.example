@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
 //
-// Copy to Local.xcconfig, which git ignores, and put your Apple team ID here: Xcode's Settings ›
-// Accounts › your account shows it, or developer.apple.com › Account › Membership details.
+// Copy to Local.xcconfig, which git ignores, and put your Apple team ID here. Your developer
+// account shows it on developer.apple.com, under Account › Membership details.
 DEVELOPMENT_TEAM = ABCDE12345
