@@ -240,7 +240,7 @@ A recipient with an open stream gets the record at once whatever the header says
 | 0x01 `record` | server → device | A delivery record |
 | 0x02 `cursor` | server → device | A cursor covering every record sent so far |
 | 0x03 `log` | server → device | `circle_id[16] ‖ u64 seq ‖ head[32]`: the circle's log has grown; fetch it |
-| 0x04 `push` | server → device | A `Push` (spec §14.2), signed but not sealed. Used for silence alerts |
+| 0x04 `push` | server → device | A `Push` (spec §14.2), signed but neither padded nor sealed: the connection is already the device's. Used for silence alerts |
 | 0x05 `event` | server → device | JSON, below |
 | 0x06 `time` | server → device | `u64` server time. Sent on connecting and at least every 15 minutes |
 | 0x10 `post` | device → server | `u32 id ‖ u8 wake ‖ envelope`, with wake 0 none, 1 notify, 2 locate. Only with the `stream_post` feature |

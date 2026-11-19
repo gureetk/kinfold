@@ -49,6 +49,11 @@ kotlin {
     }
 
     sourceSets {
+        commonMain.dependencies {
+            // What a client on a network needs beyond the standard library's bare coroutines:
+            // cancellation, timeouts, delays and locks (the client layer, src/commonMain/.../client)
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+        }
         commonTest.dependencies {
             implementation(kotlin("test"))
         }
@@ -91,6 +96,11 @@ kotlin {
 
 tasks.withType<Test>().configureEach {
     systemProperty("kinfold.vectors", vectorsFile)
+    // A running server for the client layer's tests on the JVM (test-with-server.sh starts one): its URL,
+    // a setup code, and the certificate it serves. Without them those tests are skipped.
+    for (name in listOf("kinfold.server", "kinfold.setup", "kinfold.cacert")) {
+        providers.gradleProperty(name).orNull?.let { systemProperty(name, it) }
+    }
 }
 
 // The simulator to test on, by name or UDID, as -Pkinfold.simulator=...; Kotlin's default otherwise.

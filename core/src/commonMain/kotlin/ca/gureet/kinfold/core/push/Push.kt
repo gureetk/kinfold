@@ -104,6 +104,20 @@ object Pushes {
         val padded = key.open(sealed.copyOfRange(8, 40), info(p, deviceId, keyId), sealed.copyOfRange(40, sealed.size))
             ?: return dropped(PushReceipt.Drop.BAD_CIPHERTEXT)
         val push = Padding.unpadExact(padded, PLAIN_SIZE) ?: return dropped(PushReceipt.Drop.BAD_PADDING)
+        return checkSigned(p, push, deviceId, serverKey, now)
+    }
+
+    /**
+     * What a device does with a push that came on its own stream (API.md §7, message `push`): signed
+     * but not sealed, since the connection is already the device's. The same checks as [open] from
+     * the signature on: its server's key [serverKey] signed it for [deviceId] within 10 minutes of
+     * the device's trusted time [now], and the body fits the type.
+     */
+    suspend fun openSigned(p: Primitives, push: ByteArray, deviceId: Bytes, serverKey: Bytes, now: ULong): PushReceipt =
+        if (push.size > PLAIN_SIZE) dropped(PushReceipt.Drop.WRONG_SIZE) else checkSigned(p, push, deviceId, serverKey, now)
+
+    /** The checks of [open] after unsealing: the structure, the signature, the time and the body. */
+    private suspend fun checkSigned(p: Primitives, push: ByteArray, deviceId: Bytes, serverKey: Bytes, now: ULong): PushReceipt {
         val parsed = try {
             readAll(push) {
                 val version = u8()
