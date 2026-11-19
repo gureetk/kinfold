@@ -41,9 +41,9 @@ jobs:
           echo "$RUNNER_TEMP/gradle-9.9.1/bin" >> "$GITHUB_PATH"
 
       # The core, built from source, configures its Android target.
-      - name: Android platform 36 and build tools 36.0.0
+      - name: Android platform 37.0 and build tools 36.0.0
         run: |
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-36" "build-tools;36.0.0" > /dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-37.0" "build-tools;36.0.0" > /dev/null
 
       - name: The server's modules
         working-directory: server

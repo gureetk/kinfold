@@ -33,9 +33,9 @@ jobs:
           unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/gradle-9.9.1/bin" >> "$GITHUB_PATH"
 
-      - name: Android platform 36 and build tools 36.0.0
+      - name: Android platform 37.0 and build tools 36.0.0
         run: |
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-36" "build-tools;36.0.0" > /dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-37.0" "build-tools;36.0.0" > /dev/null
 
       # Every artifact is checked against gradle/verification-metadata.xml. Maven Central
       # sometimes answers 429, so a failed download is tried again after a pause; a hash
@@ -93,7 +93,7 @@ jobs:
           API: ${{ matrix.api }}
         run: |
           sdk="$ANDROID_HOME/cmdline-tools/latest/bin"
-          "$sdk/sdkmanager" --install "platforms;android-36" "build-tools;36.0.0" "platform-tools" "emulator" "system-images;android-$API;default;x86_64" > /dev/null
+          "$sdk/sdkmanager" --install "platforms;android-37.0" "build-tools;36.0.0" "platform-tools" "emulator" "system-images;android-$API;default;x86_64" > /dev/null
           # avdmanager and the emulator look for AVDs in different places on the runner unless told one.
           export ANDROID_AVD_HOME="$RUNNER_TEMP/avd"
           mkdir -p "$ANDROID_AVD_HOME"
