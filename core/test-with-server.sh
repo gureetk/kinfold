@@ -4,7 +4,9 @@
 # Runs the core's tests on the JVM against a real server: builds the server from ../server, starts
 # it on 127.0.0.1 with TLS on a throwaway certificate and member tokens on, prints a setup code,
 # and passes the server's URL, the code and the certificate to Gradle, which hands them to the
-# client layer's tests. Needs Go, OpenSSL, curl, JDK 21, Gradle 9.9.1 and an Android SDK.
+# client layer's tests. Needs Go, OpenSSL, curl, JDK 21, Gradle 9.9.1 and an Android SDK. On a Mac,
+# KINFOLD_TEST_TASKS=iosSimulatorArm64Test runs them in the iOS simulator; OpenSSL there means
+# Homebrew's, since the system's LibreSSL makes keys differently.
 #
 # Usage: ./test-with-server.sh [more Gradle arguments]
 #
@@ -32,9 +34,11 @@ trap cleanup EXIT INT TERM
 
 (cd "$here/../server" && CGO_ENABLED=0 go build -trimpath -o "$work/kinfold" ./cmd/kinfold)
 
-# A certificate for 127.0.0.1 that lives a day; the tests trust it and nothing else.
+# A certificate for 127.0.0.1 that lives a day; the tests trust it and nothing else. Apple's
+# systems take a TLS server's certificate only if it says it is one (extendedKeyUsage).
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -subj /CN=127.0.0.1 \
-    -addext subjectAltName=IP:127.0.0.1 -keyout "$work/key.pem" -out "$work/cert.pem" 2> /dev/null
+    -addext subjectAltName=IP:127.0.0.1 -addext extendedKeyUsage=serverAuth \
+    -keyout "$work/key.pem" -out "$work/cert.pem" 2> /dev/null
 
 "$work/kinfold" serve --url "$url" --listen "127.0.0.1:$port" --data "$work/data" \
     --tls-cert "$work/cert.pem" --tls-key "$work/key.pem" --no-clock-check > "$work/server.log" 2>&1 &
