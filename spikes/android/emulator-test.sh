@@ -64,7 +64,8 @@ code=$("$harness" invite --data "$data" --cacert "$KINFOLD_CACERT" | grep -o 'KF
 harness_pid=$!
 
 # The phone: the test build, its permissions as a person would grant them, and the battery exemption.
-adb logcat -c
+# Some emulators refuse to clear a log; the test reads only its own lines anyway.
+adb logcat -c || true
 adb install -r -g android/build/outputs/apk/release/android-release.apk
 adb shell pm grant "$pkg" android.permission.ACCESS_BACKGROUND_LOCATION 2> /dev/null || true
 adb shell dumpsys deviceidle whitelist +"$pkg"

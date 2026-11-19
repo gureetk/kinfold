@@ -63,15 +63,15 @@ jobs:
           KINFOLD_TEST_TASKS: ":harness:test :harness:installDist"
         run: |
           log="$RUNNER_TEMP/harness.log"
-          for attempt in 1 2 3 4; do
+          for attempt in 1 2 3 4 5; do
             if ./test-with-server.sh --no-daemon > "$log" 2>&1; then
               cat "$log"
               break
             fi
             cat "$log"
             if grep -q -E "Dependency verification failed|There were failing tests|Compilation error|Kotlin compiler|didn't start|No setup code" "$log"; then exit 1; fi
-            [ "$attempt" = 4 ] && exit 1
-            sleep $((attempt * 30))
+            [ "$attempt" = 5 ] && exit 1
+            sleep $((attempt * 60))
           done
           python3 - <<'PY'
           import glob, xml.etree.ElementTree as ET
@@ -89,15 +89,15 @@ jobs:
         working-directory: spikes
         run: |
           log="$RUNNER_TEMP/app.log"
-          for attempt in 1 2 3 4; do
+          for attempt in 1 2 3 4 5; do
             if gradle --no-daemon --console=plain :android:testDebugUnitTest :android:assembleRelease > "$log" 2>&1; then
               cat "$log"
               break
             fi
             cat "$log"
             if grep -q -E "Dependency verification failed|There were failing tests|Compilation error|Kotlin compiler|Lint found" "$log"; then exit 1; fi
-            [ "$attempt" = 4 ] && exit 1
-            sleep $((attempt * 30))
+            [ "$attempt" = 5 ] && exit 1
+            sleep $((attempt * 60))
           done
           ls -l android/build/outputs/apk/release/android-release.apk
 
@@ -188,11 +188,11 @@ jobs:
           KINFOLD_TEST_CMD: android/emulator-test.sh
         run: |
           log="$RUNNER_TEMP/build.log"
-          for attempt in 1 2 3 4; do
+          for attempt in 1 2 3 4 5; do
             if gradle --no-daemon --console=plain :android:assembleRelease :harness:installDist > "$log" 2>&1; then break; fi
             cat "$log"
             if grep -q -E "Dependency verification failed|Compilation error|Kotlin compiler|Lint found" "$log"; then exit 1; fi
-            [ "$attempt" = 4 ] && exit 1
+            [ "$attempt" = 5 ] && exit 1
             sleep $((attempt * 60))
           done
           adb reverse tcp:8443 tcp:8443
