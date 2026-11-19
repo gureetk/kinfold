@@ -614,16 +614,22 @@ func TestInvites(t *testing.T) {
 	}
 	repost(mk(2), e.clk.Now()+1_800_000) // half an hour; the hour it was given stands
 
-	// A reader waiting for the result is answered when it is written.
+	// A reader waiting for the result is answered when it is written, with the server's time
+	// as the answer goes out, not as the call came in (API.md §1).
 	got := make(chan *httptest.ResponseRecorder)
 	go func() { got <- e.do(call{method: "GET", path: path + "/result?wait=10", token: sam}) }()
 	time.Sleep(100 * time.Millisecond)
+	e.clk.Advance(5_000)
+	answeredAt := strconv.FormatUint(e.clk.Now(), 10)
 	result := join(mk(1), 9)
 	expect(t, e.octets("PUT", path+"/result", result, jordan), http.StatusNoContent, "")
 	select {
 	case rec := <-got:
 		if rec.Code != http.StatusOK || !bytes.Equal(rec.Body.Bytes(), result) {
 			t.Fatalf("waiting reader: %d", rec.Code)
+		}
+		if at := rec.Header().Get("Kinfold-Time"); at != answeredAt {
+			t.Fatalf("waiting reader's Kinfold-Time %s, want %s", at, answeredAt)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the waiting reader wasn't woken")

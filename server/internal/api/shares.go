@@ -241,11 +241,13 @@ func (s *Server) latestShare(q *request) error {
 			return err
 		}
 		if sh.Update != nil && sh.Seq > after {
+			s.stampTime(q.w)
 			writeBytes(q.w, http.StatusOK, sh.Update)
 			return nil
 		}
 		left := time.Until(deadline)
 		if left <= 0 {
+			s.stampTime(q.w)
 			q.w.WriteHeader(http.StatusNoContent)
 			return nil
 		}
