@@ -41,7 +41,7 @@ adb reverse tcp:8443 tcp:8443 && KINFOLD_TEST_TASKS=connectedAndroidDeviceTest .
                                     # device's 127.0.0.1:8443 forwarded to the server on this computer
 ```
 
-The client's test against a server (`ClientServerTest`, in `commonTest`) runs only through `test-with-server.sh`, which passes the server's URL, a setup code and its certificate as the Gradle properties `kinfold.server`, `kinfold.setup` and `kinfold.cacert`. The build hands them to the JVM tests as system properties and to the Android device tests as instrumentation arguments; without them the test is skipped, as it is on iOS, which has no transport yet. CI runs it in the `client` workflow, for changes to the core or the server: on the JVM, and in Android 8.0 and 16 emulators, where Android 8.0 takes its TLS 1.3 from Conscrypt.
+The client's test against a server (`ClientServerTest`, in `commonTest`) runs only through `test-with-server.sh`, which passes the server's URL, a setup code and its certificate as the Gradle properties `kinfold.server`, `kinfold.setup` and `kinfold.cacert`. The build hands them to the JVM tests as system properties and to the Android device tests as instrumentation arguments; without them the test is skipped, as it is on iOS, which has no transport yet. CI runs it in the `client` workflow, for changes to the core or the server: on the JVM, and in Android 10 and 16 emulators.
 
 The iOS targets exist only on a Mac, since Xcode compiles the Swift and holds the Apple SDKs; elsewhere the build is the JVM and Android one. iOS 17 is the oldest the core supports, as CryptoKit's HPKE needs it.
 
