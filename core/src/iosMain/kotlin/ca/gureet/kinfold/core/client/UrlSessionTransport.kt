@@ -5,6 +5,7 @@ import ca.gureet.kinfold.core.crypto.toByteArray
 import ca.gureet.kinfold.core.crypto.toNSData
 import kotlinx.cinterop.COpaquePointerVar
 import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.alloc
 import kotlinx.cinterop.allocArray
 import kotlinx.cinterop.convert
 import kotlinx.cinterop.memScoped
@@ -12,6 +13,7 @@ import kotlinx.cinterop.ptr
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.set
 import kotlinx.cinterop.usePinned
+import kotlinx.cinterop.value
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -29,10 +31,13 @@ import kotlinx.coroutines.withTimeoutOrNull
 import platform.CoreFoundation.CFArrayCreate
 import platform.CoreFoundation.CFArrayRef
 import platform.CoreFoundation.CFDataCreate
+import platform.CoreFoundation.CFErrorCopyDescription
+import platform.CoreFoundation.CFErrorRefVar
 import platform.CoreFoundation.CFRelease
 import platform.CoreFoundation.kCFTypeArrayCallBacks
 import platform.Foundation.*
 import platform.Security.SecCertificateCreateWithData
+import platform.Security.SecTrustRef
 import platform.Security.SecTrustEvaluateWithError
 import platform.Security.SecTrustSetAnchorCertificates
 import platform.Security.errSecSuccess
@@ -187,8 +192,11 @@ private class Events(private val anchors: CFArrayRef?) :
         completionHandler(null)
     }
 
+    // Without a session-level handler, URLSession asks the task about the server's certificate, so
+    // a refusal can say why in the task's own error.
     override fun URLSession(
         session: NSURLSession,
+        task: NSURLSessionTask,
         didReceiveChallenge: NSURLAuthenticationChallenge,
         completionHandler: (NSURLSessionAuthChallengeDisposition, NSURLCredential?) -> Unit,
     ) {
@@ -200,11 +208,16 @@ private class Events(private val anchors: CFArrayRef?) :
         }
         // The server's chain must end at the one certificate trusted, under the usual rules for TLS
         // servers, the server's name among them.
-        if (SecTrustSetAnchorCertificates(trust, anchors) == errSecSuccess && SecTrustEvaluateWithError(trust, null)) {
+        val refusal = refusalOf(trust, anchors)
+        if (refusal == null) {
             completionHandler(NSURLSessionAuthChallengeUseCredential, NSURLCredential.create(trust = trust))
-        } else {
-            completionHandler(NSURLSessionAuthChallengeCancelAuthenticationChallenge, null)
+            return
         }
+        when (val owner = owner(task)) {
+            is Exchange -> owner.untrusted(refusal)
+            is Socket -> owner.untrusted(refusal)
+        }
+        completionHandler(NSURLSessionAuthChallengeCancelAuthenticationChallenge, null)
     }
 
     override fun URLSession(session: NSURLSession, webSocketTask: NSURLSessionWebSocketTask, didOpenWithProtocol: String?) {
@@ -229,6 +242,12 @@ private class Exchange(
 ) {
     private val body = NSMutableData()
     private var tooLong = false
+    private var refusal: String? = null
+
+    /** The server's certificate wasn't trusted, for [why]. */
+    fun untrusted(why: String) {
+        refusal = why
+    }
 
     fun received(task: NSURLSessionDataTask, data: NSData) {
         if (tooLong) return
@@ -245,6 +264,7 @@ private class Exchange(
         val response = task.response as? NSHTTPURLResponse
         when {
             tooLong -> cont.resumeWithException(TransportException("a response longer than $max bytes"))
+            refusal != null -> cont.resumeWithException(TransportException("$method failed: the server's certificate isn't trusted: $refusal"))
             error != null || response == null -> cont.resumeWithException(TransportException("$method failed: ${describe(error)}"))
             else -> {
                 val headers = response.allHeaderFields.entries.associate { (name, value) -> name.toString() to value.toString() }
@@ -261,7 +281,13 @@ private class Socket(private val task: NSURLSessionWebSocketTask, private val pi
     private val lock = NSLock()
     private var closedWith: Int? = null
     private var pongDue = false
+    private var refusal: String? = null
     private val pings = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /** The server's certificate wasn't trusted, for [why]. */
+    fun untrusted(why: String) {
+        refusal = why
+    }
 
     fun didOpen() {
         opened.complete(Unit)
@@ -310,10 +336,10 @@ private class Socket(private val task: NSURLSessionWebSocketTask, private val pi
             // The server answered the upgrade with a status of its own, or not at all.
             val status = (task.response as? NSHTTPURLResponse)?.statusCode?.toInt() ?: 0
             opened.completeExceptionally(
-                if (status != 0 && status != 101) {
-                    WebSocketRefused(status, ByteArray(0))
-                } else {
-                    TransportException("the stream didn't open: ${describe(error)}")
+                when {
+                    refusal != null -> TransportException("the stream didn't open: the server's certificate isn't trusted: $refusal")
+                    status != 0 && status != 101 -> WebSocketRefused(status, ByteArray(0))
+                    else -> TransportException("the stream didn't open: ${describe(error)}")
                 },
             )
         }
@@ -378,6 +404,17 @@ private inline fun <T> locked(lock: NSLock, block: () -> T): T {
     } finally {
         lock.unlock()
     }
+}
+
+/** Null if [trust] ends at [anchors] and meets the rules for a TLS server; otherwise why not. */
+private fun refusalOf(trust: SecTrustRef, anchors: CFArrayRef): String? = memScoped {
+    if (SecTrustSetAnchorCertificates(trust, anchors) != errSecSuccess) return@memScoped "the certificate to trust couldn't be set"
+    val error = alloc<CFErrorRefVar>()
+    if (SecTrustEvaluateWithError(trust, error.ptr)) return@memScoped null
+    val e = error.value ?: return@memScoped "no reason given"
+    val text = CFErrorCopyDescription(e)?.let { CFBridgingRelease(it) as? String }
+    CFRelease(e)
+    text ?: "no reason given"
 }
 
 private fun sendable(code: Int): Boolean = code in 1000..4999 && code !in 1004..1006 && code !in 1015..2999
