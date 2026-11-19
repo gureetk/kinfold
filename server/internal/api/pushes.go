@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -21,6 +22,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gureetk/kinfold/server/internal/apns"
+	"github.com/gureetk/kinfold/server/internal/clock"
 	"github.com/gureetk/kinfold/server/internal/identity"
 	"github.com/gureetk/kinfold/server/internal/push"
 	"github.com/gureetk/kinfold/server/internal/store"
@@ -41,6 +44,9 @@ type PushConfig struct {
 	// VAPID is the server's key for Web Push (RFC 8292); without one, Web Push
 	// registrations are refused.
 	VAPID *ecdsa.PrivateKey
+	// Apple holds the server's own Apple push keys, for a family that builds the iOS app
+	// itself; without any, apns registrations are refused.
+	Apple AppleConfig
 	// Client talks to the relay; Resolve looks up push hosts; RootCAs, if set, are the
 	// only roots Web Push hosts' certificates may chain to. Tests replace them.
 	Client  *http.Client
@@ -48,8 +54,25 @@ type PushConfig struct {
 	RootCAs *x509.CertPool
 }
 
+// AppleConfig is the server's own Apple push keys (API.md §12).
+type AppleConfig struct {
+	// BundleID is the app's bundle ID, which Apple calls its topic.
+	BundleID string
+	// Keys are the keys by environment: "sandbox" for builds run from Xcode, "production"
+	// for TestFlight and App Store builds.
+	Keys map[string]apns.Key
+	// Hosts replace Apple's hosts by environment, and Client the HTTP client that reaches
+	// them. Tests set them.
+	Hosts  map[string]string
+	Client *http.Client
+}
+
+// appleHosts are Apple's push hosts by environment.
+var appleHosts = map[string]string{"sandbox": apns.Sandbox, "production": apns.Production}
+
 const (
 	maxCapability = 1 << 10
+	maxAppleToken = apns.MaxDevice
 	maxEndpoint   = 1000
 	pushTimeout   = 10 * time.Second
 	maxSending    = 16 // pushes in flight at once; past that they are dropped
@@ -75,12 +98,13 @@ var deliveryNames = map[uint8]string{push.Alert: "alert", push.Background: "back
 // putPush is PUT /v1/push: the device's push registration, replacing any before it.
 func (s *Server) putPush(q *request) error {
 	var in struct {
-		Kind     string `json:"kind"`
-		Notify   b64    `json:"notify"`
-		Locate   b64    `json:"locate"`
-		Endpoint string `json:"endpoint"`
-		P256dh   b64    `json:"p256dh"`
-		Auth     b64    `json:"auth"`
+		Kind        string `json:"kind"`
+		Notify      b64    `json:"notify"`
+		Locate      b64    `json:"locate"`
+		Endpoint    string `json:"endpoint"`
+		P256dh      b64    `json:"p256dh"`
+		Auth        b64    `json:"auth"`
+		Environment string `json:"environment"`
 	}
 	if err := q.json(&in); err != nil {
 		return err
@@ -110,7 +134,19 @@ func (s *Server) putPush(q *request) error {
 		}
 		reg.Endpoint, reg.P256dh, reg.Auth = in.Endpoint, in.P256dh, in.Auth
 	case "apns":
-		return &apiError{status: http.StatusForbidden, code: "forbidden", msg: "this server holds no Apple key"}
+		if len(s.apple) == 0 {
+			return &apiError{status: http.StatusForbidden, code: "forbidden", msg: "this server holds no Apple key"}
+		}
+		if _, ok := appleHosts[in.Environment]; !ok {
+			return badRequest("environment is sandbox or production")
+		}
+		if s.apple[in.Environment] == nil {
+			return &apiError{status: http.StatusForbidden, code: "forbidden", msg: "this server holds no Apple key for " + in.Environment}
+		}
+		if len(in.Notify) == 0 || len(in.Notify) > maxAppleToken || len(in.Locate) > maxAppleToken {
+			return badRequest("notify is an Apple device token of at most 256 bytes, and so is locate if present")
+		}
+		reg.Notify, reg.Locate, reg.Environment = in.Notify, nilIfEmpty(in.Locate), in.Environment
 	default:
 		return badRequest("kind is relay, webpush or apns")
 	}
@@ -223,7 +259,8 @@ func (s *Server) preparePush(tx store.Tx, device []byte, ptype uint8, body []byt
 	} else if err != nil {
 		return nil, err
 	}
-	if (reg.Kind == "relay" && s.cfg.Push.Relay == "") || (reg.Kind == "webpush" && s.cfg.Push.VAPID == nil) {
+	if (reg.Kind == "relay" && s.cfg.Push.Relay == "") || (reg.Kind == "webpush" && s.cfg.Push.VAPID == nil) ||
+		(reg.Kind == "apns" && s.apple[reg.Environment] == nil) {
 		return nil, nil // the operator has switched that route off since
 	}
 	dev, err := tx.Device(device)
@@ -236,7 +273,7 @@ func (s *Server) preparePush(tx store.Tx, device []byte, ptype uint8, body []byt
 	if err != nil || !ok {
 		return nil, err
 	}
-	if delivery == push.Location && !(reg.Kind == "relay" && reg.Locate != nil) {
+	if delivery == push.Location && !((reg.Kind == "relay" || reg.Kind == "apns") && reg.Locate != nil) {
 		delivery = fallback
 	}
 	p, err := push.Build(s.cfg.Key, device, ptype, now, body)
@@ -320,6 +357,8 @@ func (s *Server) deliver(j *pushJob) {
 		err = s.sendRelay(ctx, j)
 	case "webpush":
 		err = s.sendWebPush(ctx, j)
+	case "apns":
+		err = s.sendApple(ctx, j)
 	}
 	switch {
 	case errors.Is(err, errDeadPush):
@@ -358,6 +397,74 @@ func (s *Server) sendRelay(ctx context.Context, j *pushJob) error {
 		return errDeadPush
 	}
 	return fmt.Errorf("the relay answered %s", resp.Status)
+}
+
+// appleClients makes a client for each environment the server holds an Apple key for.
+func appleClients(c AppleConfig, clk clock.Clock) map[string]*apns.Client {
+	out := map[string]*apns.Client{}
+	for env, key := range c.Keys {
+		host, ok := c.Hosts[env]
+		if !ok {
+			host = appleHosts[env]
+		}
+		if host != "" {
+			out[env] = apns.NewClient(host, key, c.Client, func() time.Time { return time.UnixMilli(int64(clk.Now())) })
+		}
+	}
+	return out
+}
+
+// sendApple sends a push straight to Apple with the server's own key (API.md §12), as the
+// Apple notification the relay would send.
+func (s *Server) sendApple(ctx context.Context, j *pushJob) error {
+	env := j.reg.Environment
+	c := s.apple[env]
+	if c == nil {
+		return errors.New("no Apple key for the registration's environment")
+	}
+	device := j.reg.Notify
+	if j.delivery == push.Location {
+		device = j.reg.Locate
+	}
+	n, err := push.ForApple(j.delivery, j.sealed, j.sentAt)
+	if err != nil {
+		return err
+	}
+	err = c.Send(ctx, apns.Notification{Device: device, Topic: s.cfg.Push.Apple.BundleID + n.TopicSuffix, PushType: n.PushType,
+		Priority: n.Priority, Expiration: n.Expiration, Payload: n.Payload})
+	s.appleAnswered(env, n.PushType, err)
+	var refused *apns.Error
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &refused) && refused.Dead():
+		return errDeadPush
+	}
+	return fmt.Errorf("%s %s push: %w", env, n.PushType, err)
+}
+
+// appleAnswer is how Apple last answered a push in an environment, for the operator's status.
+type appleAnswer struct {
+	at     uint64
+	answer string
+}
+
+// appleAnswered notes Apple's answer: "accepted", or the refusal and the push type.
+func (s *Server) appleAnswered(env, pushType string, err error) {
+	a := appleAnswer{at: s.cfg.Clock.Now(), answer: "accepted"}
+	if err != nil {
+		a.answer = pushType + ": " + strings.TrimPrefix(err.Error(), "apns: ")
+	}
+	s.appleMu.Lock()
+	defer s.appleMu.Unlock()
+	s.appleLast[env] = a
+}
+
+// appleEnvironments are the environments the server holds Apple keys for, in order.
+func (s *Server) appleEnvironments() []string {
+	envs := slices.Collect(maps.Keys(s.apple))
+	slices.Sort(envs)
+	return envs
 }
 
 // dropPush ends a registration the push host has called dead. The device hears of it the

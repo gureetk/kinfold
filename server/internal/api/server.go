@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gureetk/kinfold/server/internal/apns"
 	"github.com/gureetk/kinfold/server/internal/clock"
 	"github.com/gureetk/kinfold/server/internal/identity"
 	"github.com/gureetk/kinfold/server/internal/store"
@@ -102,7 +103,11 @@ type Server struct {
 	sending  chan struct{} // pushes in flight
 	webPush  *http.Client
 	searcher *http.Client
+	apple    map[string]*apns.Client // by environment
 	start    uint64
+
+	appleMu   sync.Mutex
+	appleLast map[string]appleAnswer // by environment
 
 	infoMu sync.Mutex
 	info   []byte
@@ -119,6 +124,7 @@ func New(cfg Config) *Server {
 	s := &Server{cfg: cfg, mux: http.NewServeMux(), limiter: newLimiter(cfg.Limits.withDefaults()), waits: newHub(),
 		streams: newStreams(), links: newMailboxes(), sending: make(chan struct{}, maxSending), start: cfg.Clock.Now()}
 	s.webPush, s.searcher = s.webPushClient(), searchClient()
+	s.apple, s.appleLast = appleClients(cfg.Push.Apple, cfg.Clock), map[string]appleAnswer{}
 	s.routes()
 	return s
 }

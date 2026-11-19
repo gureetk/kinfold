@@ -34,7 +34,7 @@ import (
 var schema embed.FS
 
 // schemaVersion is the version this server's code reads and writes.
-const schemaVersion = 8
+const schemaVersion = 9
 
 // readers is how many connections may read at once.
 const readers = 4
@@ -888,15 +888,16 @@ func (t *tx) SharesOf(device []byte) ([]store.Share, error) {
 // ---- push registrations ----
 
 func (t *tx) PutPush(v store.PushReg) error {
-	_, err := t.q.Exec(`INSERT OR REPLACE INTO pushes (device, kind, notify, locate, endpoint, p256dh, auth) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		v.Device, v.Kind, nilIfEmpty(v.Notify), nilIfEmpty(v.Locate), v.Endpoint, nilIfEmpty(v.P256dh), nilIfEmpty(v.Auth))
+	_, err := t.q.Exec(`INSERT OR REPLACE INTO pushes (device, kind, notify, locate, endpoint, p256dh, auth, environment)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		v.Device, v.Kind, nilIfEmpty(v.Notify), nilIfEmpty(v.Locate), v.Endpoint, nilIfEmpty(v.P256dh), nilIfEmpty(v.Auth), v.Environment)
 	return err
 }
 
 func (t *tx) Push(device []byte) (store.PushReg, error) {
 	var v store.PushReg
-	err := t.q.QueryRow(`SELECT device, kind, notify, locate, endpoint, p256dh, auth FROM pushes WHERE device = ?`, device).
-		Scan(&v.Device, &v.Kind, &v.Notify, &v.Locate, &v.Endpoint, &v.P256dh, &v.Auth)
+	err := t.q.QueryRow(`SELECT device, kind, notify, locate, endpoint, p256dh, auth, environment FROM pushes WHERE device = ?`, device).
+		Scan(&v.Device, &v.Kind, &v.Notify, &v.Locate, &v.Endpoint, &v.P256dh, &v.Auth, &v.Environment)
 	v.Notify, v.Locate, v.P256dh, v.Auth = nilIfEmpty(v.Notify), nilIfEmpty(v.Locate), nilIfEmpty(v.P256dh), nilIfEmpty(v.Auth)
 	return v, notFound(err)
 }

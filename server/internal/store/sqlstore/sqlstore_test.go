@@ -3,6 +3,7 @@
 package sqlstore_test
 
 import (
+	"bytes"
 	"database/sql"
 	"fmt"
 	"os"
@@ -268,6 +269,32 @@ func TestUpgradeDropsOldWatches(t *testing.T) {
 		}
 		if ws, err := tx.Watches(); err != nil || len(ws) != 0 {
 			t.Errorf("%d watches kept: %v", len(ws), err)
+		}
+		return nil
+	}))
+}
+
+// Version 9 keeps push registrations, which have no Apple environment.
+func TestUpgradeKeepsPushes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kinfold.db")
+	db, err := sql.Open("sqlite3", "file:"+path)
+	mustDo(t, err)
+	for v := 1; v <= 8; v++ {
+		script, err := os.ReadFile(fmt.Sprintf("schema/%d.sql", v))
+		mustDo(t, err)
+		_, err = db.Exec(string(script))
+		mustDo(t, err)
+	}
+	for _, q := range []string{`PRAGMA user_version = 8`,
+		`INSERT INTO pushes VALUES (x'01', 'relay', x'02', NULL, '', NULL, NULL)`} {
+		_, err = db.Exec(q)
+		mustDo(t, err)
+	}
+	db.Close()
+	s := open(t, path)
+	mustDo(t, s.View(func(tx store.Tx) error {
+		if p, err := tx.Push([]byte{1}); err != nil || p.Kind != "relay" || !bytes.Equal(p.Notify, []byte{2}) || p.Environment != "" {
+			t.Errorf("the registration: %+v %v", p, err)
 		}
 		return nil
 	}))

@@ -60,6 +60,10 @@ func (s *Server) discovery(q *request) error {
 		features = append(features, "webpush")
 		out["vapid_key"] = k
 	}
+	if envs := s.appleEnvironments(); len(envs) > 0 {
+		features = append(features, "apns")
+		out["apns"] = map[string]any{"bundle_id": s.cfg.Push.Apple.BundleID, "environments": envs}
+	}
 	out["features"] = features
 	writeJSON(q.w, http.StatusOK, out)
 	return nil
@@ -116,6 +120,17 @@ type Health struct {
 	PushesInFlight int     `json:"pushes_in_flight"`
 	LinkMailboxes  int     `json:"link_mailboxes"`
 	Relay          *bool   `json:"relay_reachable"` // nil without a relay
+	// Apple is the server's own Apple keys, by environment, with Apple's last answer.
+	Apple []AppleHealth `json:"apple,omitempty"`
+}
+
+// AppleHealth is one of the server's Apple keys and how Apple last answered a push sent
+// with it: "accepted", or the push type and Apple's refusal. Empty before the first push.
+type AppleHealth struct {
+	Environment string `json:"environment"`
+	KeyID       string `json:"key_id"`
+	LastAt      uint64 `json:"last_at,omitempty"`
+	LastAnswer  string `json:"last_answer,omitempty"`
 }
 
 // Health reports the server's state. With a relay, it asks whether the relay answers, which
@@ -130,6 +145,12 @@ func (s *Server) Health(ctx context.Context) Health {
 		ok := s.relayAnswers(ctx)
 		h.Relay = &ok
 	}
+	s.appleMu.Lock()
+	for _, env := range s.appleEnvironments() {
+		last := s.appleLast[env]
+		h.Apple = append(h.Apple, AppleHealth{Environment: env, KeyID: s.apple[env].KeyID(), LastAt: last.at, LastAnswer: last.answer})
+	}
+	s.appleMu.Unlock()
 	return h
 }
 
