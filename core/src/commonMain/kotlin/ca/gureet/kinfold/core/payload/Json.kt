@@ -82,14 +82,22 @@ sealed class Json {
          * [bytes] as UTF-8 JSON whose top level is an object, within [limits]; null for anything
          * else. A key repeated within an object is refused here too.
          */
-        fun parseObject(bytes: ByteArray, limits: Limits): Obj? {
+        fun parseObject(bytes: ByteArray, limits: Limits): Obj? = parse(bytes) { Parser(it, limits).document() }
+
+        /**
+         * [bytes] as UTF-8 JSON whose top level is an array, within [limits]; null for anything else.
+         * For answers of the HTTP API that list things (API.md §5, §8).
+         */
+        fun parseArray(bytes: ByteArray, limits: Limits): Arr? = parse(bytes) { Parser(it, limits).arrayDocument() }
+
+        private inline fun <T> parse(bytes: ByteArray, read: (String) -> T): T? {
             val text = try {
                 bytes.decodeToString(throwOnInvalidSequence = true)
             } catch (_: CharacterCodingException) {
                 return null
             }
             return try {
-                Parser(text, limits).document()
+                read(text)
             } catch (_: NotAPayload) {
                 null
             }
@@ -166,6 +174,15 @@ private class Parser(private val s: String, private val limits: Json.Limits) {
         ws()
         if (i != s.length) refuse()
         return obj
+    }
+
+    fun arrayDocument(): Json.Arr {
+        ws()
+        if (peek() != '[') refuse()
+        val arr = arr(1)
+        ws()
+        if (i != s.length) refuse()
+        return arr
     }
 
     private fun value(depth: Int, limit: Int): Json {

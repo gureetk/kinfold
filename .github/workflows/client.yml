@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: CC0-1.0
+name: Client
+
+# The core's client layer against a real server: the server built from server/, started with TLS
+# by core/test-with-server.sh, and the core's tests on the JVM run against it. A change on either
+# side can break the other, so both start it.
+on:
+  # Branches are tested through their pull requests; pushes only on main.
+  push:
+    branches: [main]
+    paths: ["core/**", "server/**", "spec/vectors/**", ".github/workflows/client.yml"]
+  pull_request:
+    paths: ["core/**", "server/**", "spec/vectors/**", ".github/workflows/client.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  client:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache: false
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Gradle 9.9.1, checked against its published SHA-256
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/gradle.zip" https://services.gradle.org/distributions/gradle-9.9.1-bin.zip
+          echo "d8a18a7a841dd5df825d35a685fad6f2d7f12ac0c280e57b67c27b4a520ba228  $RUNNER_TEMP/gradle.zip" | sha256sum -c
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-9.9.1/bin" >> "$GITHUB_PATH"
+
+      - name: Android platform 36 and build tools 36.0.0
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-36" "build-tools;36.0.0" > /dev/null
+
+      # Every module is checked against go.sum, whose hashes the Go checksum database vouches for.
+      - name: The server's modules
+        working-directory: server
+        run: |
+          go mod download
+          go mod verify
+
+      # Every artifact is checked against gradle/verification-metadata.xml. Maven Central
+      # sometimes answers 429, so a failed download is tried again after a pause; a hash
+      # that doesn't match, or a test that fails, fails at once.
+      - name: The core's tests on the JVM, against the server
+        working-directory: core
+        run: |
+          log="$RUNNER_TEMP/client.log"
+          for attempt in 1 2 3 4; do
+            if ./test-with-server.sh --no-daemon > "$log" 2>&1; then
+              cat "$log"
+              break
+            fi
+            cat "$log"
+            if grep -q -E "Dependency verification failed|There were failing tests|Compilation error|Kotlin compiler|didn't start|No setup code" "$log"; then exit 1; fi
+            [ "$attempt" = 4 ] && exit 1
+            sleep $((attempt * 30))
+          done
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          ran = 0
+          for f in glob.glob("build/test-results/jvmTest/*ClientServerTest.xml"):
+              t = ET.parse(f).getroot()
+              ran += int(t.get("tests", 0)) - int(t.get("skipped", 0))
+          print(f"{ran} tests against the server")
+          raise SystemExit(0 if ran else 1)
+          PY
