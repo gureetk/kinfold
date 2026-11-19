@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest
+import java.util.Base64
 
 plugins {
     kotlin("multiplatform") version "2.4.21"
@@ -27,7 +28,8 @@ kotlin {
 
     android {
         namespace = "ca.gureet.kinfold.core"
-        compileSdk = 36
+        // Android 17's API, which OkHttp asks to be compiled against
+        compileSdk = 37
         minSdk = 26
         withHostTest {}
         // The device tests run commonTest on a phone or an emulator, against the platform's own libraries.
@@ -35,6 +37,15 @@ kotlin {
             sourceSetTreeName = "test"
         }.configure {
             instrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+            // The server for the client layer's test on a device (test-with-server.sh, with `adb reverse`
+            // so that the device's 127.0.0.1 is the computer's): its URL, a setup code, and its
+            // certificate's PEM in base64url, since the device can't read the file.
+            for (name in listOf("kinfold.server", "kinfold.setup")) {
+                providers.gradleProperty(name).orNull?.let { instrumentationRunnerArguments[name] = it }
+            }
+            providers.gradleProperty("kinfold.cacert").orNull?.let {
+                instrumentationRunnerArguments["kinfold.cacert"] = Base64.getUrlEncoder().withoutPadding().encodeToString(File(it).readBytes())
+            }
         }
     }
 
@@ -70,6 +81,8 @@ kotlin {
             dependencies {
                 // The same Tink, built for Android with protobuf-lite
                 implementation("com.google.crypto.tink:tink-android:1.24.0")
+                // HTTPS and the WebSocket for the client layer: Android has no public WebSocket client
+                implementation("com.squareup.okhttp3:okhttp:5.5.1")
             }
         }
         getByName("androidDeviceTest") {
@@ -78,6 +91,8 @@ kotlin {
             dependencies {
                 // Runs JUnit tests on the device
                 implementation("androidx.test:runner:1.7.0")
+                // TLS 1.3 for the client layer's test on Android 8 and 9, which have none of their own
+                implementation("org.conscrypt:conscrypt-android:2.9.0")
             }
         }
         if (onMac) {

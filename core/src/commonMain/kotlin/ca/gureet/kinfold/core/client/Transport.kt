@@ -5,7 +5,9 @@ package ca.gureet.kinfold.core.client
  * The platform's networking, which the client layer reaches only through this interface, as the
  * core reaches cryptography only through `Crypto`: HTTPS exchanges and WebSockets, over TLS 1.3
  * with the system's trusted certificates (API.md §1). An implementation adds nothing of its own:
- * no cookies, no cache, no redirects and no retries.
+ * no cookies, no cache, no redirects and no retries of its own choosing. Like most HTTP libraries
+ * it may send a request again on a new connection when the one it reused turns out to be dead;
+ * a call that stores something is safe to repeat (API.md §1).
  */
 interface Transport {
     /**

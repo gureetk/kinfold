@@ -4,6 +4,8 @@ package ca.gureet.kinfold.core
 import ca.gureet.kinfold.core.crypto.Crypto
 import ca.gureet.kinfold.core.crypto.CryptoKitCrypto
 import ca.gureet.kinfold.core.crypto.toByteArray
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.runBlocking
 import platform.Foundation.NSData
 import platform.Foundation.create
 
@@ -17,3 +19,11 @@ actual fun protocolText(): String = read(SpecFiles.PROTOCOL)
 
 private fun read(path: String): String =
     checkNotNull(NSData.create(contentsOfFile = path)) { "can't read $path" }.toByteArray().decodeToString()
+
+// No transport on iOS yet.
+actual fun testServer(): TestServer? = null
+
+actual fun <T> blocking(block: suspend CoroutineScope.() -> T): T = runBlocking(block = block)
+
+// kotlin.test has no skipping on Kotlin/Native: the test passes without running.
+actual fun skip(why: String) = println("skipped: $why")
