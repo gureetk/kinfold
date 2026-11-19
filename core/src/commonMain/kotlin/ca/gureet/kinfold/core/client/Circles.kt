@@ -256,6 +256,9 @@ suspend fun Client.registerWatch(grant: WatchGrant) {
     lock.withLock { keepGrant(grant) }
 }
 
+/** The watches this account holds in [circleId], and those on its devices (API.md §8). */
+suspend fun Client.watches(circleId: Bytes): List<WatchInfo> = authed { api.watches(circleId) }
+
 /** The grant a `watch_grant` payload carries, or null if it carries none that parses. */
 fun grantOf(payload: Json.Obj): WatchGrant? {
     if (payload.string("t") != "watch_grant") return null

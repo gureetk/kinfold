@@ -200,20 +200,6 @@ jobs:
           ')
           echo "SIMULATOR=$device" >> "$GITHUB_ENV"
 
-      # TEMPORARY, for the first run of this branch: the metadata the iOS targets need for the new
-      # dependency, written from an empty Gradle cache and printed, then the committed file put back.
-      - name: (temporary) Verification metadata for the iOS targets
-        working-directory: core
-        run: |
-          cp gradle/verification-metadata.xml "$RUNNER_TEMP/committed.xml"
-          GRADLE_USER_HOME="$RUNNER_TEMP/fresh-gradle" gradle --no-daemon --console=plain --write-verification-metadata sha256 \
-            iosSimulatorArm64Test linkDebugTestIosArm64 -Pkinfold.simulator="$SIMULATOR" > "$RUNNER_TEMP/wvm.log" 2>&1 || echo "the build failed"
-          grep -E "^e: |^w: |FAILED|BUILD|tests completed" "$RUNNER_TEMP/wvm.log" | head -60 || true
-          echo "----- metadata diff -----"
-          diff "$RUNNER_TEMP/committed.xml" gradle/verification-metadata.xml || true
-          echo "----- end -----"
-          cp "$RUNNER_TEMP/committed.xml" gradle/verification-metadata.xml
-
       - name: The vectors on the iOS simulator, and the test binary for iPhones
         working-directory: core
         run: |
