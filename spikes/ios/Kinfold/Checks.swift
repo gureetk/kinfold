@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
 //
 // The app launched with --checks runs the core check and spike 5's page by itself, prints what
-// they found to standard output, and exits: with 0 if the core check passed and the page finished,
-// whatever the page found. CI launches it that way in the simulator (xcrun simctl launch
-// --console-pty ... ca.gureet.kinfold --checks). What the page finds in WebKit is spike 5's result.
+// they found to standard output, and exits with 0 if both passed. CI launches it that way in the
+// simulator (xcrun simctl launch --console-pty ... ca.gureet.kinfold --checks).
 
 import SwiftUI
 
@@ -25,7 +24,7 @@ enum Checks {
         say("== Spike 5's page in WebKit ==\n\(web?.text ?? "The page didn't finish in ten minutes.")\n")
         say(core.ok ? "The core check passed." : "The core check failed.")
         say(web.map { $0.ok ? "The page finished: every check passed." : "The page finished: some checks failed." } ?? "The page didn't finish.")
-        exit(core.ok && web != nil ? 0 : 1)
+        exit(core.ok && web?.ok == true ? 0 : 1)
     }
 
     static func say(_ text: String) {

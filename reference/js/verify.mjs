@@ -76,6 +76,32 @@ async function attempt(name, fn) {
 }
 function throws(fn) { try { fn(); return false; } catch { return true; } }
 
+// §3.3: an implementation's Ed25519 signatures needn't repeat. WebKit's WebCrypto, like CryptoKit,
+// adds randomness to each one, so there a structure signed again can't repeat a vector's bytes.
+// KINFOLD_SIGNATURES_REPEAT=0 takes that path on a platform whose signatures do repeat, to test it.
+const signsDeterministically = process.env?.KINFOLD_SIGNATURES_REPEAT === '0' ? false : await (async () => {
+  const signer = await K.importSigningKey(new Uint8Array(32).fill(7));
+  const label = V.primitives.sign[0].label, data = utf8('kinfold');
+  return bytesEqual(await K.signLabeled(signer, label, data), await K.signLabeled(signer, label, data));
+})();
+if (!signsDeterministically) {
+  notes.push("This platform's Ed25519 signatures don't repeat (§3.3), so a structure signed again is checked "
+    + 'against the vector up to its signature, at the end, and its new signature must verify.');
+}
+
+/**
+ * Checks `again`, which this platform has just signed, against a vector's bytes, `want` in hex. Where
+ * signatures repeat, they are the same bytes. Where they don't, they are the same up to the last
+ * `sigBytes`, the signature, and `verifies(again)` must hold.
+ */
+async function checkSignedAgain(name, again, want, verifies, sigBytes = 64) {
+  if (signsDeterministically) return checkEq(name, toHex(again), want);
+  const w = X(want), n = w.length - sigBytes;
+  const same = again.length === w.length && bytesEqual(again.slice(0, n), w.slice(0, n));
+  check(`${name}, up to its signature`, same, same ? '' : diff(toHex(again), want).join('; '));
+  return check(`${name}: its signature verifies`, await verifies(again));
+}
+
 // ---------------------------------------------------------------------------
 // Identities (also builds the key tables every later group uses)
 // ---------------------------------------------------------------------------
@@ -115,7 +141,11 @@ for (const [pname, p] of Object.entries(V.identities)) {
       check(`${pname} link ${i} is not valid for another account`, !await K.identityLinkValid(X(p.account_id).fill(7, 0, 1), l));
       rebuilt.push(await K.buildIdentityLink(X(p.account_id), person.ikSigners[i], person.ikSigners[i + 1]));
     }
-    checkEq(`${pname} chain rebuilt (both keys sign each link)`, toHex(concat(...rebuilt)), p.chain);
+    if (signsDeterministically) checkEq(`${pname} chain rebuilt (both keys sign each link)`, toHex(concat(...rebuilt)), p.chain);
+    for (const [i, link] of signsDeterministically ? [] : rebuilt.entries()) {
+      await checkSignedAgain(`${pname} link ${i} rebuilt (both keys sign it)`, link, toHex(X(p.chain).slice(i * K.LINK_LEN, (i + 1) * K.LINK_LEN)),
+        async b => K.identityLinkValid(X(p.account_id), K.parseChain(b)[0]), 128);
+    }
   });
   for (const [dname, d] of Object.entries(p.devices)) {
     const dev = { ...d, person };
@@ -134,8 +164,9 @@ for (const [pname, p] of Object.entries(V.identities)) {
       check(`${d.label} cert well-formed`, await K.deviceCertWellFormed(cert));
       check(`${d.label} cert proves the account with the person's chain`, await K.chainProves(cert, K.parseChain(X(p.chain))));
       if (p.ik_seeds.length > 1) check(`${d.label} cert does not prove the account without the chain`, !await K.chainProves(cert, []));
-      checkEq(`${d.label} cert rebuilt (Sign IK over first 60 bytes)`,
-        toHex(await K.buildDeviceCert(person.ikSigner, { account_id: cert.account_id, device_kind: cert.device_kind, issued_at: cert.issued_at, dsk_pub: cert.dsk_pub })), d.cert);
+      await checkSignedAgain(`${d.label} cert rebuilt (Sign IK over first 60 bytes)`,
+        await K.buildDeviceCert(person.ikSigner, { account_id: cert.account_id, device_kind: cert.device_kind, issued_at: cert.issued_at, dsk_pub: cert.dsk_pub }), d.cert,
+        async b => K.deviceCertWellFormed(K.parseDeviceCert(b)));
 
       checkEq(`${d.label} bundles/deks count`, d.bundles.length, d.deks.length);
       // §4.1: a recovery device signs and never receives, so it has no encryption key.
@@ -153,10 +184,10 @@ for (const [pname, p] of Object.entries(V.identities)) {
           { version: b.version, suite: b.suite, account_id: b.account_id, device_id: b.device_id, dek_pub: b.dek_pub },
           { version: 0, suite: 1, account_id: p.account_id, device_id: d.device_id, dek_pub: d.deks[i]?.pub });
         check(`${d.label} bundle[${i}] valid for device`, await K.keyBundleValidFor(b, X(d.dsk_pub), X(p.account_id)));
-        checkEq(`${d.label} bundle[${i}] rebuilt`,
-          toHex(await K.buildKeyBundle(dev.signer, { account_id: b.account_id, dek_pub: b.dek_pub, not_before: b.not_before,
-            not_after: b.not_after, proto_max: b.proto_max, features: b.features })),
-          hexBundle);
+        await checkSignedAgain(`${d.label} bundle[${i}] rebuilt`,
+          await K.buildKeyBundle(dev.signer, { account_id: b.account_id, dek_pub: b.dek_pub, not_before: b.not_before,
+            not_after: b.not_after, proto_max: b.proto_max, features: b.features }),
+          hexBundle, async again => K.keyBundleValidFor(K.parseKeyBundle(again), X(d.dsk_pub), X(p.account_id)));
       }
     });
   }
@@ -183,7 +214,8 @@ for (const t of V.primitives.kdf) checkEq(`KDF(${t.label}, ${t.length})`, toHex(
 for (const t of V.primitives.sign) {
   await attempt('sign', async () => {
     const signer = await K.importSigningKey(X(t.seed));
-    checkEq(`Sign(${t.label})`, toHex(await K.signLabeled(signer, t.label, X(t.data))), t.sig);
+    await checkSignedAgain(`Sign(${t.label})`, await K.signLabeled(signer, t.label, X(t.data)), t.sig,
+      async sig => K.verifyLabeled(signer.pub, t.label, X(t.data), sig));
     check(`Verify(${t.label})`, await K.verifyLabeled(signer.pub, t.label, X(t.data), X(t.sig)));
     check('Verify rejects a modified message', !await K.verifyLabeled(signer.pub, t.label, X(t.data + '00'), X(t.sig)));
     // §3.3: S + L is the same signature with a non-canonical S and MUST be rejected.
@@ -451,8 +483,12 @@ for (const { tag, ent } of epochEntries) {
 // ---------------------------------------------------------------------------
 
 group('log rebuild (seal)');
+// Where signatures don't repeat, an entry signed again matches the vector only up to its own
+// signature at the end, so the certificates, consents and links inside it are the log's own: the
+// identities and invite groups check those signed again.
 /** Re-issue a certificate found in the log, under the identity key it names. */
 async function reissue(cert) {
+  if (!signsDeterministically) return cert.raw;
   const person = personOfAccount.get(toHex(cert.account_id));
   return K.buildDeviceCert(ikSignerFor(person, toHex(cert.ik_pub)),
     { account_id: cert.account_id, device_kind: cert.device_kind, issued_at: cert.issued_at, dsk_pub: cert.dsk_pub });
@@ -493,7 +529,7 @@ for (const [i, ent] of L.entries.entries()) {
         const commit = await K.termsCommit(X(ent.terms_salt), X(ent.terms));
         checkEq(`entry ${i} details are terms_salt ‖ terms`, ent.details_plaintext, ent.terms_salt + ent.terms);
         nb = { cert, chain: chainUpTo(dev.person, ik), bundle, invite_id: invId, terms_commit: commit,
-          consent_sig: await K.joinConsent(ikSignerFor(dev.person, ik), st.circle_id, invId, cert, bundle, commit),
+          consent_sig: signsDeterministically ? await K.joinConsent(ikSignerFor(dev.person, ik), st.circle_id, invId, cert, bundle, commit) : b.consent_sig,
           admin: b.admin, details: await reseal() };
         break;
       }
@@ -535,13 +571,18 @@ for (const [i, ent] of L.entries.entries()) {
         break;
       case K.ENTRY.ROTATE_IDENTITY: {
         const person = author.person;
-        nb = { link: await K.buildIdentityLink(X(person.account_id), ikSignerFor(person, toHex(b.link.old_ik_pub)), ikSignerFor(person, toHex(b.link.new_ik_pub))) };
+        nb = { link: signsDeterministically
+          ? await K.buildIdentityLink(X(person.account_id), ikSignerFor(person, toHex(b.link.old_ik_pub)), ikSignerFor(person, toHex(b.link.new_ik_pub)))
+          : b.link.raw };
         break;
       }
     }
     rebuiltTypes.add(e.type);
     const rebuilt = await K.buildEntry(header, K.serializeEntryBody(e.type, nb), author.signer);
-    checkEq(`entry ${i} (${ent.description}) rebuilt byte-for-byte`, toHex(rebuilt), ent.raw);
+    await checkSignedAgain(`entry ${i} (${ent.description}) rebuilt byte-for-byte`, rebuilt, ent.raw, async b => {
+      const f = K.parseEntryFraming(b);
+      return K.verify(author.signer.pub, 'log-entry', f.signed, f.sig);
+    });
   });
 }
 checkEq('the main log uses, and this rebuilds, every entry type but REMOVE_MEMBER',
@@ -600,7 +641,10 @@ for (const ev of V.envelopes.valid) {
       header: { kind: ev.kind, circle_id: X(L.circle_id), sender_device_id: X(sender.device_id), seq: ev.seq, sent_at: ev.sent_at, ttl_s: ev.ttl_s, log_head: X(ev.log_head) },
       recipients, payload: X(ev.payload_bytes), signer: sender.signer, messageSecret: X(ev.message_secret),
     });
-    checkEq(`${ev.name} rebuilt byte-for-byte`, toHex(rebuilt), ev.raw);
+    await checkSignedAgain(`${ev.name} rebuilt byte-for-byte`, rebuilt, ev.raw, async b => {
+      const v = K.parseEnvelope(b);
+      return K.verify(sender.signer.pub, 'envelope', v.signed, v.sig);
+    });
   });
 }
 for (const ev of V.envelopes.invalid) {
@@ -779,8 +823,9 @@ await attempt('invite', async () => {
   const other = { ...f, terms_bytes: K.serializeMemberTerms({ ...f.terms, teen_until: f.terms.teen_until + 1n }) };
   check('the same request against other terms is refused', !(await K.checkJoinRequest(jr, other, jrv.now)).termsMatch);
   const maya = people.get('maya');
-  checkEq('consent recomputed with the invitee IK',
-    toHex(await K.joinConsent(maya.ikSigner, f.circle_id, jr.invite_id, jr.cert, jr.bundle, jr.terms_commit)), jrv.consent);
+  await checkSignedAgain('consent recomputed with the invitee IK',
+    await K.joinConsent(maya.ikSigner, f.circle_id, jr.invite_id, jr.cert, jr.bundle, jr.terms_commit), jrv.consent,
+    async sig => (await K.checkJoinRequest({ ...jr, consent_sig: sig }, f, jrv.now)).consentValid);
   checkEq('join request rebuilt byte-for-byte',
     toHex(await K.sealJoinRequest(f.secret, { cert: jr.cert, chain: jr.chain, bundle: jr.bundle, terms_commit: jr.terms_commit, consent_sig: jr.consent_sig, name: jr.name }, jr.nonce)), jrv.message);
 
@@ -919,7 +964,8 @@ for (const vname of ['from_existing', 'from_new', 'from_existing_rotated']) {
       lid, senderCert: X(existing.cert), senderSigner: existing.signer, newDeviceId: X(fresh.device_id),
       newDekPub: dekPub, payload: utf8(D.response_payload), ikmE: X(D.response_ikm),
     });
-    checkEq(T('response rebuilt byte-for-byte'), toHex(rebuilt), D.response);
+    await checkSignedAgain(T('response rebuilt byte-for-byte'), rebuilt, D.response,
+      async b => (await K.openLinkResponse(b, link.secret, me, who)).ok);
     // The same response is refused by a device expecting another identity key.
     const wrong = await K.openLinkResponse(X(D.response), link.secret, me, { account_id: who.account_id, ik_pub: X(people.get('maya').ik_pub) });
     check(T('response refused when the identity key is not the expected one'), !wrong.ok);
@@ -994,7 +1040,8 @@ for (const t of V.server_moves) {
     check(`${t.name} refused by a client that used another URL`, !await K.checkServerMove(X(t.move), X(V.auth.server_key), t.new_url));
     if (t.valid) {
       const server = await K.importSigningKey(X(V.auth.server_seed));
-      checkEq(`${t.name} rebuilt`, toHex(await K.buildServerMove(server, { old_url: t.old_url, new_url: t.new_url, new_key: X(t.new_key), issued_at: t.issued_at })), t.move);
+      await checkSignedAgain(`${t.name} rebuilt`, await K.buildServerMove(server, { old_url: t.old_url, new_url: t.new_url, new_key: X(t.new_key), issued_at: t.issued_at }), t.move,
+        async b => K.checkServerMove(b, X(V.auth.server_key), V.auth.server_url));
     }
   });
 }
@@ -1037,13 +1084,16 @@ await attempt('auth', async () => {
   check('server_info verifies against the trusted key and URL', await K.checkServerInfo(X(a.server_info), serverKey, a.server_url));
   check('server_info rejected for another URL', !await K.checkServerInfo(X(a.server_info), serverKey, a.server_url + '/'));
   check('server_info rejected for another key', !await K.checkServerInfo(X(a.server_info), X(people.get('jordan').ik_pub), a.server_url));
-  checkEq('server_info rebuilt', toHex(await K.buildServerInfo(server, { server_url: info.server_url, issued_at: info.issued_at, expires_at: info.expires_at })), a.server_info);
+  await checkSignedAgain('server_info rebuilt', await K.buildServerInfo(server, { server_url: info.server_url, issued_at: info.issued_at, expires_at: info.expires_at }), a.server_info,
+    async b => K.checkServerInfo(b, serverKey, a.server_url));
   const dev = devices.get(a.device);
   checkEq('device_id', a.device_id, dev.device_id);
   check('challenge_sig verifies', await K.verifyChallenge(serverKey, X(a.challenge), X(a.device_id), a.expires_at, X(a.challenge_sig)));
-  checkEq('challenge_sig recomputed', toHex(await K.signChallenge(server, X(a.challenge), X(a.device_id), a.expires_at)), a.challenge_sig);
+  await checkSignedAgain('challenge_sig recomputed', await K.signChallenge(server, X(a.challenge), X(a.device_id), a.expires_at), a.challenge_sig,
+    async sig => K.verifyChallenge(serverKey, X(a.challenge), X(a.device_id), a.expires_at, sig));
   check('device_sig verifies', await K.verifyLogin(X(dev.dsk_pub), serverKey, X(a.challenge), X(a.device_id), X(a.device_sig)));
-  checkEq('device_sig recomputed', toHex(await K.signLogin(dev.signer, serverKey, X(a.challenge), X(a.device_id))), a.device_sig);
+  await checkSignedAgain('device_sig recomputed', await K.signLogin(dev.signer, serverKey, X(a.challenge), X(a.device_id)), a.device_sig,
+    async sig => K.verifyLogin(X(dev.dsk_pub), serverKey, X(a.challenge), X(a.device_id), sig));
   check('device_sig does not verify for another server key', !await K.verifyLogin(X(dev.dsk_pub), X(people.get('jordan').ik_pub), X(a.challenge), X(a.device_id), X(a.device_sig)));
 });
 
@@ -1065,9 +1115,10 @@ await attempt('watch_grants', async () => {
     { circle_id: g.circle_id, watched_device_id: g.watched_device_id, watcher_account_id: g.watcher_account_id, after_min: g.after_min, issued_at: g.issued_at, not_after: g.not_after },
     W.fields);
   const watched = devicesById.get(W.fields.watched_device_id);
-  checkEq('the first grant rebuilt with the watched device\'s key',
-    toHex(await K.buildWatchGrant(watched.signer, { circle_id: g.circle_id, watched_device_id: g.watched_device_id,
-      watcher_account_id: g.watcher_account_id, after_min: g.after_min, issued_at: g.issued_at, not_after: g.not_after })), W.grants[0].grant);
+  await checkSignedAgain('the first grant rebuilt with the watched device\'s key',
+    await K.buildWatchGrant(watched.signer, { circle_id: g.circle_id, watched_device_id: g.watched_device_id,
+      watcher_account_id: g.watcher_account_id, after_min: g.after_min, issued_at: g.issued_at, not_after: g.not_after }), W.grants[0].grant,
+    async b => K.watchGrantValid(b, st, W.now));
   check('a grant that is cut short is not valid', !await K.watchGrantValid(X(W.grants[0].grant).slice(0, -1), st, W.now));
   check('the first grant stops being valid at not_after', await K.watchGrantValid(X(W.grants[0].grant), st, W.fields.not_after - 1)
     && !await K.watchGrantValid(X(W.grants[0].grant), st, W.fields.not_after));
@@ -1085,8 +1136,10 @@ await attempt('push', async () => {
     const got = await K.openPush(sealed, X(t.device_id), await keysFor(t.keys), serverKey, t.now);
     if (!check(`${t.name} (${t.description}) opens`, got.ok, got.error)) continue;
     checkEq(`${t.name} type / sent_at / body`, { type: got.type, sent_at: got.sent_at, body: got.body }, { type: t.type, sent_at: t.sent_at, body: t.body });
-    checkEq(`${t.name} push rebuilt (server signature over device_id ‖ push)`, toHex(await K.buildPush(server, X(t.device_id), t.type, t.sent_at, X(t.body))), t.push);
     const kid = toHex(sealed.slice(0, 8));
+    // Sealed again for the same device and opened as a device opens it, which checks the signature.
+    await checkSignedAgain(`${t.name} push rebuilt (server signature over device_id ‖ push)`, await K.buildPush(server, X(t.device_id), t.type, t.sent_at, X(t.body)), t.push,
+      async b => (await K.openPush(await K.sealPush(b, X(t.device_id), X(dekByKeyId.get(kid).pub), X(t.ikm)), X(t.device_id), await keysFor(t.keys), serverKey, t.now)).ok);
     checkEq(`${t.name} sealed rebuilt byte-for-byte`, toHex(await K.sealPush(X(t.push), X(t.device_id), X(dekByKeyId.get(kid).pub), X(t.ikm))), t.sealed);
     if (t.type === K.PUSH.RECORDS) {
       checkEq(`${t.name} records re-serialized`,
@@ -1115,7 +1168,8 @@ await attempt('push', async () => {
   for (const d of Object.values(K.RELAY_DELIVERY).filter(x => x !== R.delivery)) {
     check(`relay signature does not verify as delivery ${d}`, !await K.verifyRelayPush(serverKey, ...args, d, X(R.sig)));
   }
-  checkEq('relay signature recomputed', toHex(await K.signRelayPush(server, ...args, R.delivery)), R.sig);
+  await checkSignedAgain('relay signature recomputed', await K.signRelayPush(server, ...args, R.delivery), R.sig,
+    async sig => K.verifyRelayPush(serverKey, ...args, R.delivery, sig));
   check('relay refuses a delivery type it does not know', !await K.verifyRelayPush(serverKey, ...args, 4, await K.signRelayPush(server, ...args, 4)));
 });
 
