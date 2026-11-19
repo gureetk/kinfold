@@ -288,11 +288,13 @@ func (s *Server) getLinkSlot(q *request) error {
 			return err
 		}
 		if got != nil {
+			s.stampTime(q.w)
 			writeBytes(q.w, http.StatusOK, got)
 			return nil
 		}
 		left := time.Until(deadline)
 		if left <= 0 {
+			s.stampTime(q.w)
 			q.w.WriteHeader(http.StatusNoContent)
 			return nil
 		}

@@ -265,8 +265,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, fn func(*request)
 		return fn(req)
 	}()
 	if err != nil {
+		s.stampTime(w)
 		writeError(w, err)
 	}
+}
+
+// stampTime sets Kinfold-Time to the server's clock as a response goes out (API.md §1). serve
+// sets it as the request comes in; a call that waited for something (`wait`) would otherwise
+// carry a time that many seconds old, and set back the trusted time of the device that reads it.
+func (s *Server) stampTime(w http.ResponseWriter) {
+	w.Header().Set("Kinfold-Time", strconv.FormatUint(s.cfg.Clock.Now(), 10))
 }
 
 func checkRevision(r *http.Request) error {

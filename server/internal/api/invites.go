@@ -275,11 +275,13 @@ func (s *Server) joinResult(q *request) error {
 			return err
 		}
 		if result != nil {
+			s.stampTime(q.w)
 			writeBytes(q.w, http.StatusOK, result)
 			return nil
 		}
 		left := time.Until(deadline)
 		if left <= 0 {
+			s.stampTime(q.w)
 			q.w.WriteHeader(http.StatusNoContent)
 			return nil
 		}

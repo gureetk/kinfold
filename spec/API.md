@@ -45,7 +45,7 @@ Section numbers written "spec §…" point into PROTOCOL.md. Where the two docum
 | P+K | A phone or tablet, or the account's recovery device |
 
 - **Circle access.** A call that names a circle succeeds only for an active device of that circle at the server's current head (with one exception in §6). Everyone else gets 404, the same answer as for a circle that doesn't exist.
-- **Server time.** Every response carries `Kinfold-Time`, the server's clock in milliseconds. Devices build their trusted time on it (spec §8.4).
+- **Server time.** Every response carries `Kinfold-Time`, the server's clock in milliseconds as the response goes out: for a call that waits (`wait`), when the wait ended, not when the call came in. Devices build their trusted time on it (spec §8.4).
 - **API revision.** Clients send `Kinfold-Api: 1` with every call under `/v1/`. A server that no longer supports a client's revision answers 426; a call without the header, or naming a revision above the discovery document's `api.max`, gets 400 `bad_request`.
 - **Posting twice is safe.** Every call that stores a protocol object succeeds again when the same bytes are sent again, with the answer the first call got. Clients retry after a lost reply without changing anything. An envelope is checked again before it counts as a repeat (spec §7.6 steps 1 to 8), so one that has since expired, or whose sender has since left, is refused like any other.
 - **No cross-origin access.** The server sends no CORS headers. The browser map talks to `kinfold-web`, which forwards its requests and sets the headers a browser can't, such as `Authorization` on a WebSocket.
