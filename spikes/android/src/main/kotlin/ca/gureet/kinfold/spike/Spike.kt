@@ -21,7 +21,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import org.conscrypt.Conscrypt
 import java.io.File
 import java.util.Base64
 
@@ -42,13 +41,9 @@ object Spike {
 
     val p: Primitives by lazy { Primitives(TinkCrypto()) }
 
-    /**
-     * Android has TLS 1.3 from version 10; before it, Conscrypt brings it, for this transport only.
-     * A test build trusts only its test server's certificate (build.gradle.kts).
-     */
+    /** A test build trusts only its test server's certificate (build.gradle.kts). */
     val transport: Transport by lazy {
-        val tls = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) Conscrypt.newProvider() else null
-        if (isTestBuild) OkHttpTransport.trusting(Base64.getDecoder().decode(BuildConfig.TEST_CA), tls) else OkHttpTransport(tlsProvider = tls)
+        if (isTestBuild) OkHttpTransport.trusting(Base64.getDecoder().decode(BuildConfig.TEST_CA)) else OkHttpTransport()
     }
 
     /** A build for the emulator test, which trusts a test server's certificate. */

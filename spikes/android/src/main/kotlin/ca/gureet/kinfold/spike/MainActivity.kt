@@ -152,10 +152,8 @@ class MainActivity : Activity() {
                 appendLine("Location: " + locationState())
                 appendLine("Notifications: " + if (notificationsAllowed()) "allowed" else "not allowed")
                 appendLine("Battery optimization: " + if (pm.isIgnoringBatteryOptimizations(packageName)) "off for this app" else "on (ask to turn it off)")
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    val restricted = getSystemService(ActivityManager::class.java).isBackgroundRestricted
-                    appendLine("Background restricted: " + if (restricted) "yes (lift it in App info)" else "no")
-                }
+                val restricted = getSystemService(ActivityManager::class.java).isBackgroundRestricted
+                appendLine("Background restricted: " + if (restricted) "yes (lift it in App info)" else "no")
                 append("Ping every ${Spike.pingS} s; heartbeat after 25 minutes without an upload")
             }
             val lines = Spike.log.recent().asReversed().joinToString("\n")
@@ -170,7 +168,6 @@ class MainActivity : Activity() {
 
     private fun locationState(): String = when {
         !granted(Manifest.permission.ACCESS_FINE_LOCATION) -> "not allowed"
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.Q -> "allowed (all the time on this Android)"
         granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION) -> "allowed all the time"
         else -> "allowed while in use only"
     }
@@ -188,7 +185,6 @@ class MainActivity : Activity() {
 
     private fun allowBackground() {
         when {
-            Build.VERSION.SDK_INT < Build.VERSION_CODES.Q -> toast("Nothing more to allow on this Android")
             !granted(Manifest.permission.ACCESS_FINE_LOCATION) -> toast("Allow location first")
             // Android asks this one separately, and from 11 on, in its settings: choose "Allow all the time".
             else -> ask(Manifest.permission.ACCESS_BACKGROUND_LOCATION)

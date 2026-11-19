@@ -89,7 +89,7 @@ jobs:
           PY
 
   # The same test on Android, through OkHttp, in an emulator running stock Android: the oldest
-  # version the core supports, whose TLS 1.3 comes from Conscrypt, and a recent one with its own.
+  # version the core supports and a recent one.
   # The server runs on the runner, and adb forwards the emulator's 127.0.0.1:8443 to it.
   android:
     runs-on: ubuntu-24.04
@@ -97,7 +97,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        api: [26, 36]
+        api: [29, 36]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

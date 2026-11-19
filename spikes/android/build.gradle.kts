@@ -14,7 +14,7 @@ android {
         // Its own ID, so that it never collides with the real app
         applicationId = "ca.gureet.kinfold.spike"
         // The oldest Android the core supports
-        minSdk = 26
+        minSdk = 29
         targetSdk = 36
         versionCode = 1
         versionName = "spike 2"
@@ -51,8 +51,6 @@ dependencies {
     implementation("ca.gureet.kinfold:core")
     // Coroutines for the app's own work, the version the core uses
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
-    // TLS 1.3 on Android 8 and 9, which have none of their own; used only below Android 10
-    implementation("org.conscrypt:conscrypt-android:2.9.0")
     // kotlin.test on JUnit 4, the runner Android's host tests use
     testImplementation(kotlin("test-junit"))
 }
