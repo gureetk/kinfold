@@ -193,7 +193,7 @@ jobs:
             cat "$log"
             if grep -q -E "Dependency verification failed|Compilation error|Kotlin compiler|Lint found" "$log"; then exit 1; fi
             [ "$attempt" = 4 ] && exit 1
-            sleep $((attempt * 30))
+            sleep $((attempt * 60))
           done
           adb reverse tcp:8443 tcp:8443
           ../core/test-with-server.sh --no-daemon

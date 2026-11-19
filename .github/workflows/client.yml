@@ -169,7 +169,9 @@ jobs:
               break
             fi
             cat "$log"
-            if grep -q -E "Dependency verification failed|There were failing tests|Compilation error|Kotlin compiler|tests on .* failed|didn't start|No setup code" "$log"; then exit 1; fi
+            # A failing test is reported below, with its message.
+            if grep -q -E "There were failing tests|tests on .* failed" "$log"; then break; fi
+            if grep -q -E "Dependency verification failed|Compilation error|Kotlin compiler|didn't start|No setup code" "$log"; then exit 1; fi
             [ "$attempt" = 4 ] && exit 1
             sleep $((attempt * 30))
           done
@@ -180,7 +182,10 @@ jobs:
               for case in ET.parse(f).getroot().iter("testcase"):
                   if case.get("classname", "").endswith("ClientServerTest") and case.find("skipped") is None:
                       ran += 1
-                      failed += case.find("failure") is not None or case.find("error") is not None
+                      for problem in [case.find("failure"), case.find("error")]:
+                          if problem is not None:
+                              failed += 1
+                              print(f"FAILED {case.get('name')}:\n{(problem.text or problem.get('message') or '')[:4000]}")
           print(f"{ran} tests against the server on the device, {failed} failed")
           raise SystemExit(1 if failed or not ran else 0)
           PY
