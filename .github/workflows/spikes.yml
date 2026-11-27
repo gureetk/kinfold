@@ -189,6 +189,6 @@ jobs:
         run: |
           xcrun simctl install "$SIMULATOR" "$RUNNER_TEMP/dd/Build/Products/Debug-iphonesimulator/Kinfold.app"
           log="$RUNNER_TEMP/kinfold.log"
-          xcrun simctl launch --console-pty "$SIMULATOR" ca.gureet.kinfold --checks > "$log" 2>&1 || true
+          xcrun simctl launch --console-pty "$SIMULATOR" ca.gureet.kinfold.spikes --checks > "$log" 2>&1 || true
           cat "$log"
           grep -q "The core check passed." "$log" && grep -q "The page finished: every check passed." "$log"

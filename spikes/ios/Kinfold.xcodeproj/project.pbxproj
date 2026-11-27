@@ -305,7 +305,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = ca.gureet.kinfold;
+				PRODUCT_BUNDLE_IDENTIFIER = ca.gureet.kinfold.spikes;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
 			name = Debug;
@@ -318,7 +318,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = ca.gureet.kinfold;
+				PRODUCT_BUNDLE_IDENTIFIER = ca.gureet.kinfold.spikes;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
 			name = Release;

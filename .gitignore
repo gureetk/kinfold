@@ -17,5 +17,8 @@ spikes/ios/Config/Local.xcconfig
 spikes/ios/build/
 xcuserdata/
 *.xcodeproj/project.xcworkspace/
+# The iOS app keeps its pinned packages (Package.resolved) in its workspace.
+!apps/ios/Kinfold.xcodeproj/project.xcworkspace/
 apps/android/build/
 *.hprof
+apps/ios/Config/Local.xcconfig

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
 //
-// The iOS spike app, ca.gureet.kinfold: a screen for each spike. Launched with --checks, as CI
+// The iOS spike app, ca.gureet.kinfold.spikes: a screen for each spike. Launched with --checks, as CI
 // does in the simulator, it runs the checks below by itself, prints what they found and exits.
 
 import SwiftUI

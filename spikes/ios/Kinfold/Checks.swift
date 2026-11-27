@@ -2,7 +2,7 @@
 //
 // The app launched with --checks runs the core check and spike 5's page by itself, prints what
 // they found to standard output, and exits with 0 if both passed. CI launches it that way in the
-// simulator (xcrun simctl launch --console-pty ... ca.gureet.kinfold --checks).
+// simulator (xcrun simctl launch --console-pty ... ca.gureet.kinfold.spikes --checks).
 
 import SwiftUI
 
