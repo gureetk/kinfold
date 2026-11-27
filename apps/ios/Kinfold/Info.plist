@@ -31,7 +31,10 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
+		<string>remote-notification</string>
 	</array>
+	<key>KinfoldPushEnvironment</key>
+	<string>$(KINFOLD_PUSH_ENVIRONMENT)</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UIRequiredDeviceCapabilities</key>

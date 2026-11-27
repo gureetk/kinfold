@@ -56,7 +56,12 @@ xcrun simctl location "$sim" set 49.2827,-123.1207
 container=$(xcrun simctl get_app_container "$sim" "$bundle" data)
 
 journal() { cat "$data"/logs/*.jsonl 2> /dev/null || true; }
-applog() { cat "$container/Library/Application Support/logs/"*.jsonl 2> /dev/null || true; }
+# The app and its extensions log in the app group's container; a build without the group, in the app's.
+applog() {
+    group=$(xcrun simctl get_app_container "$sim" "$bundle" group.ca.gureet.kinfold 2> /dev/null || true)
+    if [ -n "$group" ]; then cat "$group/Library/Application Support/logs/"*.jsonl 2> /dev/null || true; fi
+    cat "$container/Library/Application Support/logs/"*.jsonl 2> /dev/null || true
+}
 
 fail() {
     echo "FAILED: $1" >&2
@@ -90,8 +95,14 @@ run_harness() {
 }
 
 launch() {
-    xcrun simctl launch "$sim" "$bundle" -KinfoldTestName Test-iPhone -KinfoldTestWatch YES -KinfoldTestShare YES -KinfoldTestRegion YES "$@"
+    xcrun simctl launch "$sim" "$bundle" -KinfoldTestName Test-iPhone -KinfoldTestWatch YES -KinfoldTestShare YES -KinfoldTestRegion YES -KinfoldTestExtension YES "$@"
 }
+
+# The app carries both extensions, for the extension points iOS starts them for.
+for ext in KinfoldNotifications:com.apple.usernotifications.service KinfoldLocation:com.apple.location.push.service; do
+    point=$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$app/PlugIns/${ext%%:*}.appex/Info.plist" 2> /dev/null || true)
+    [ "$point" = "${ext#*:}" ] || fail "the app doesn't carry ${ext%%:*}.appex for ${ext#*:}"
+done
 
 case "$role" in
 joiner)
@@ -148,6 +159,20 @@ answers=$(journal | grep -c '"e":"loc".*"answer_ms"' || true)
 xcrun simctl launch "$sim" com.apple.Preferences > /dev/null
 await applog '"e":"live_req".*"state":"received"' 200 $((asks + 1))
 await journal '"e":"loc".*"answer_ms"' 120 $((answers + 1))
+
+# The extensions' core, run inside the app on the app's files (TestDriver.swift): a push that
+# isn't one is dropped; a fix goes up from a second client on the same files, without taking a
+# sequence number the app took; and the app reads the files again before it goes on, with its
+# stream open again.
+connected=$(applog | grep -c '"e":"stream".*"state":"connected"' || true)
+touch "$container/Documents/run-extension"
+await applog '"e":"test".*"state":"extension_push".*"kind":"dropped"' 60
+await applog '"e":"test".*"state":"extension_fix".*"sent":true' 60
+await applog '"e":"reload"' 120
+await applog '"e":"stream".*"state":"connected"' 120 $((connected + 1))
+if applog | grep -E '"e":"upload".*"error"' | grep -q -i 'replay'; then
+    fail "an upload took a sequence number already used"
+fi
 
 # The engine sends no faster than the server takes: no upload was refused for its rate.
 if applog | grep -q '"e":"upload".*rate_limited'; then

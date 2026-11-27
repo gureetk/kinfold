@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
 //
-// What the phone saw, for the person to export and send when sharing misbehaves.
+// What the phone saw, for the person to export and send when sharing misbehaves. The app and both
+// extensions compile it.
 
 import Foundation
 
@@ -8,6 +9,10 @@ import Foundation
  * One JSON object a line, written by the core (LogLines), a file for each UTC day, as the Android
  * app keeps it. A line holds times, delays, distances, accuracies, states and IDs: never a
  * coordinate, a key, a name or an address. Files older than 30 days are deleted.
+ *
+ * The app and its extensions write to the same files, in the app group's container, each from
+ * its own process: every line is one write to a file opened for appending, so lines never
+ * overwrite each other.
  */
 final class EventLog {
     static let keepDays = 30
@@ -18,8 +23,7 @@ final class EventLog {
     private var recentLines: [String] = []
 
     init() {
-        dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("logs", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+        dir = Shared.directory("logs", inBackups: true)
         prune()
     }
 
@@ -37,14 +41,19 @@ final class EventLog {
                 if !FileManager.default.fileExists(atPath: url.path) {
                     FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
                 }
-                self.handle = try? FileHandle(forWritingTo: url)
-                _ = try? self.handle?.seekToEnd()
+                let fd = open(url.path, O_WRONLY | O_APPEND | O_CLOEXEC)
+                if fd >= 0 { self.handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true) }
             }
             // A full disk loses lines, not the app.
             try? self.handle?.write(contentsOf: Data((line + "\n").utf8))
             self.recentLines.append(line)
             if self.recentLines.count > 200 { self.recentLines.removeFirst(self.recentLines.count - 200) }
         }
+    }
+
+    /** Returns once every line written so far is in its file: before an extension tells iOS it is done. */
+    func flush() {
+        queue.sync { try? handle?.synchronize() }
     }
 
     /** The latest lines, newest last. */

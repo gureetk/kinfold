@@ -17,7 +17,11 @@
      * - `-KinfoldTestAdmit YES`: once in, make an invite, write it to Documents/test-invite.txt, and let in the first person who asks;
      * - `-KinfoldTestWatch YES`: agree to a silence watch;
      * - `-KinfoldTestShare YES`: share the location;
-     * - `-KinfoldTestRegion YES`: download the first map region the server offers.
+     * - `-KinfoldTestRegion YES`: download the first map region the server offers;
+     * - `-KinfoldTestExtension YES`: once the test writes Documents/run-extension, run the
+     *   extensions' core (IosExtension) inside the app, on the app's files, as an extension would:
+     *   a push that isn't one, then a fix. The simulator starts no extension for a push it didn't
+     *   get from Apple, so this is as close as CI comes.
      *
      * Once in, the home screen shows, as for a person, so the map is drawn.
      */
@@ -59,12 +63,38 @@
             if d.bool(forKey: "KinfoldTestShare") { model.startSharing(why: "test") }
             if d.bool(forKey: "KinfoldTestAdmit") { admit(model) }
             if d.bool(forKey: "KinfoldTestRegion") { region(model, attempt: 1) }
+            if d.bool(forKey: "KinfoldTestExtension") { waitForExtensionRun(model) }
+        }
+
+        private static var documents: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
+
+        private static func waitForExtensionRun(_ model: Model) {
+            let file = documents.appendingPathComponent("run-extension")
+            Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { timer in
+                guard FileManager.default.fileExists(atPath: file.path) else { return }
+                timer.invalidate()
+                try? FileManager.default.removeItem(at: file)
+                runExtension(model)
+            }
+        }
+
+        private static func runExtension(_ model: Model) {
+            let core = Shared.extensionCore(route: "test")
+            // Ten bytes that aren't a push: dropped, and only the log hears of it (PROTOCOL.md §14.2).
+            core.pushed(payload: "bm90LWEtcHVzaA") { outcome in
+                model.app.log(event: "test", keys: ["state", "kind"], values: ["extension_push", outcome.kind])
+                // Where the test put the simulator, as a location push would find it.
+                let now = Int64(Date().timeIntervalSince1970 * 1000)
+                core.fix(atMs: now, latE7: 492_827_000, lonE7: -1_231_207_000, accM: 10, spdCms: -1, headingDeg: -1, batPct: -1, charging: false, mock: true) { sent in
+                    model.app.log(event: "test", keys: ["state", "sent"], values: ["extension_fix", sent])
+                }
+            }
         }
 
         private static func admit(_ model: Model) {
             model.app.invite { pending in
                 guard let pending else { return failed(model, "no invite") }
-                let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("test-invite.txt")
+                let file = documents.appendingPathComponent("test-invite.txt")
                 try? pending.code.write(to: file, atomically: true, encoding: .utf8)
                 Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { timer in
                     if let ask = model.family?.asks.first {

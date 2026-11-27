@@ -17,8 +17,12 @@ import ca.gureet.kinfold.core.client.sessionHeaders
 import ca.gureet.kinfold.core.client.wallMillis
 import ca.gureet.kinfold.core.crypto.CryptoKitCrypto
 import ca.gureet.kinfold.core.crypto.Primitives
+import ca.gureet.kinfold.core.crypto.toByteArray
 import ca.gureet.kinfold.core.identity.SafetyCode
 import ca.gureet.kinfold.core.log.Role
+import ca.gureet.kinfold.core.payload.Json
+import ca.gureet.kinfold.core.push.PushMessage
+import ca.gureet.kinfold.core.push.PushReceipt
 import ca.gureet.kinfold.core.rendezvous.Invite
 import ca.gureet.kinfold.core.wire.Base64Url
 import ca.gureet.kinfold.core.wire.Bytes
@@ -27,6 +31,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import platform.Foundation.NSData
 import kotlin.math.min
 
 /** What only the iOS app knows, in plain types. */
@@ -82,27 +87,7 @@ class IosApp(dir: String, sealer: IosSealer, private val ios: IosPlatform, priva
     private val scope = MainScope()
     private val storage = FileStorage(dir, sealer)
 
-    private val platform: Platform = object : Platform {
-        override fun hasDevice(): Boolean = storage.hasDevice()
-
-        override fun deviceName(): String = ios.deviceName()
-
-        override var watchConsent: Boolean?
-            get() = when (ios.watchConsent()) {
-                1 -> true
-                0 -> false
-                else -> null
-            }
-            set(v) {
-                if (v != null) ios.setWatchConsent(v)
-            }
-
-        override fun log(event: String, fields: List<Pair<String, Any?>>) = ios.writeLog(LogLines.format(home.now(), event, fields))
-
-        override fun timeOfDay(ms: Long): String = ios.timeOfDay(ms)
-
-        override fun wallMs(): Long = wallMillis()
-    }
+    private val platform: Platform = IosPlatformAdapter(storage, ios) { home.now() }
 
     private val familyHooks: FamilyHooks = object : FamilyHooks {
         override fun sharing(): Boolean = hooks.sharing()
@@ -159,6 +144,7 @@ class IosApp(dir: String, sealer: IosSealer, private val ios: IosPlatform, priva
 
     /** Opens the connection: the client started, and one stream kept open (API.md §7). */
     fun connect() {
+        if (readAgainIfChanged("connect", reconnect = true)) return
         if (main?.isActive == true) return
         main = scope.launch {
             val c = home.loadClient()
@@ -232,6 +218,99 @@ class IosApp(dir: String, sealer: IosSealer, private val ios: IosPlatform, priva
             }
         }
         hooks.connected(up)
+    }
+
+    // ---- the extensions ----
+
+    /** The extensions' count of changes ([IosExtension.CHANGES]) when this process last read the files. */
+    private var seenChanges: ByteArray? = changes()
+
+    private fun changes(): ByteArray? = try {
+        storage.read(IosExtension.CHANGES)
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * Reads the device's files again if an extension changed them since this process read them:
+     * while iOS kept the app suspended, the notification or the location-push extension may have
+     * fetched the inbox, answered a push and moved the log, the cursor and the replay record on.
+     * The client and the family are let go and loaded again, and the connection, if [reconnect],
+     * opens again on them. True if it did so.
+     */
+    private fun readAgainIfChanged(why: String, reconnect: Boolean): Boolean {
+        val now = changes()
+        if (now == null || now.contentEquals(seenChanges)) return false
+        seenChanges = now
+        val again = reconnect || main != null
+        log("reload", "why" to why)
+        disconnect()
+        scope.launch {
+            home.forget()
+            family.reload()
+            if (again) connect()
+        }
+        return true
+    }
+
+    /**
+     * Registers the phone for pushes straight from Apple (API.md §12, `apns`), with the tokens
+     * iOS gave the app: [notify] from `registerForRemoteNotifications`, and [locate] from
+     * `startMonitoringLocationPushes`, which iOS gives only once the person allows location all
+     * the time. [sandbox] for a build run from Xcode, whose tokens are Apple's sandbox's.
+     */
+    fun registerPush(notify: NSData, locate: NSData?, sandbox: Boolean) {
+        scope.launch {
+            val c = home.loadClient() ?: return@launch
+            val fields = linkedMapOf<String, Json>(
+                "kind" to Json.Str("apns"),
+                "notify" to Json.Str(Base64Url.encode(notify.toByteArray())),
+            )
+            if (locate != null) fields["locate"] = Json.Str(Base64Url.encode(locate.toByteArray()))
+            fields["environment"] = Json.Str(if (sandbox) "sandbox" else "production")
+            try {
+                c.registerPush(Json.Obj(fields))
+                log("push_registration", "state" to "done", "locate" to (locate != null), "environment" to if (sandbox) "sandbox" else "production")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("push_registration", "state" to "failed", "error" to describe(e))
+            }
+        }
+    }
+
+    /**
+     * A background push (API.md §12, delivery `background`), which the server sends instead of a
+     * location push when the phone has no location-push token: handled as the stream would, then
+     * a fix if sharing goes on. [done] gets what it came to, as [IosExtension] names it.
+     */
+    fun pushed(payload: String, done: (String) -> Unit) {
+        scope.launch {
+            val kind = try {
+                val c = home.loadClient()
+                val sealed = Base64Url.decode(payload)
+                when {
+                    c == null -> "not_set_up"
+                    sealed == null -> "dropped"
+                    else -> when (val r = c.pushed(sealed)) {
+                        is PushReceipt.Dropped -> "dropped"
+                        is PushReceipt.Opened -> when (r.message) {
+                            is PushMessage.Silence -> "silence"
+                            is PushMessage.Records -> "records"
+                            is PushMessage.Wake -> "wake"
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("push", "route" to "background", "kind" to "failed", "error" to describe(e))
+                done("failed")
+                return@launch
+            }
+            log("push", "route" to "background", "kind" to kind)
+            done(kind)
+        }
     }
 
     // ---- getting in ----
@@ -422,6 +501,8 @@ class IosApp(dir: String, sealer: IosSealer, private val ios: IosPlatform, priva
      * rest go, so that both send what the same engine decides and no more.
      */
     fun fix(atMs: Long, latE7: Long, lonE7: Long, accM: Long, spdCms: Long, headingDeg: Long, batPct: Int, charging: Boolean, mock: Boolean) {
+        // A fix can be the first the app hears of iOS waking it after an extension ran.
+        if (readAgainIfChanged("fix", reconnect = false)) return
         val interval = motion.mode.intervalMs
         if (interval > 0 && takenAtMs != 0L && atMs >= takenAtMs && atMs - takenAtMs < interval * 9 / 10) return
         takenAtMs = atMs

@@ -85,6 +85,13 @@ class Home(val p: Primitives, val transport: Transport, val storage: Storage, pr
         }
     }
 
+    /**
+     * Lets go of the loaded client, so that the next [loadClient] reads the files again: after
+     * another process that shares them, such as an iPhone's app extension, changed them. The app
+     * stops using the old client first.
+     */
+    suspend fun forget() = lock.withLock { client = null }
+
     /** Sets the phone up as a new account from the server's setup code (`kinfold setup`, PROTOCOL.md §13.1). */
     suspend fun setUp(code: String): Client = lock.withLock {
         check(client == null && !platform.hasDevice()) { "this phone is set up already" }

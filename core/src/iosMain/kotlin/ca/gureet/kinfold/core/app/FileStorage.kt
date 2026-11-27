@@ -18,6 +18,13 @@ import platform.Foundation.seekToEndOfFile
 import platform.Foundation.synchronizeFile
 import platform.Foundation.writeData
 import platform.Foundation.writeToFile
+import platform.posix.LOCK_EX
+import platform.posix.O_CLOEXEC
+import platform.posix.O_CREAT
+import platform.posix.O_RDWR
+import platform.posix.close
+import platform.posix.flock
+import platform.posix.open
 
 /** Seals and opens what [FileStorage] keeps secret. The iOS app gives it: AES-GCM under a key in the Keychain. */
 interface IosSealer {
@@ -30,14 +37,17 @@ interface IosSealer {
 
 /**
  * The client's [Storage] and the app's own records on iOS: one file per name in [dir], inside the
- * app's container, which no other app reads and iCloud and iTunes backups leave out (the app marks
- * the directory). Each file is protected until the phone is first unlocked after it starts, so
+ * app group's container, which only the app and its extensions read and which iCloud and iTunes
+ * backups leave out (the app marks the directory). Each file is protected until the phone is first unlocked after it starts, so
  * that sharing works while it is locked. A write replaces the file whole, atomically.
  *
  * The files that hold secrets are sealed by [sealer]: the device's keys (`device`), each circle's
  * epoch secrets (`secrets-…`), and the app's own records (`app-…`), which hold names and the
  * family's latest positions. The rest (the verified logs, the replay record, the inbox cursor, the
  * sequence number) are what the server already holds or could work out, and stay plain.
+ *
+ * The app's extensions open the same directory, in the app group's container, from processes of
+ * their own; [next] is what keeps them from taking the same envelope sequence number.
  */
 class FileStorage(private val dir: String, private val sealer: IosSealer) : Storage {
     private val fm = NSFileManager.defaultManager
@@ -79,6 +89,23 @@ class FileStorage(private val dir: String, private val sealer: IosSealer) : Stor
         fm.removeItemAtPath(path(name), null)
     }
 
+    /**
+     * The counter, read and written under an exclusive lock on a file of its own, which the app
+     * and its extensions all take: the counter itself is replaced whole on each write, and a lock
+     * on a file that is replaced would lock nothing.
+     */
+    override fun next(name: String, first: ULong): ULong {
+        path(name)
+        val fd = open("$dir/.lock-$name", O_RDWR or O_CREAT or O_CLOEXEC, LOCK_MODE)
+        if (fd < 0) throw IllegalStateException("can't open the lock for $name")
+        try {
+            if (flock(fd, LOCK_EX) != 0) throw IllegalStateException("can't lock $name")
+            return super.next(name, first)
+        } finally {
+            close(fd) // which also lets go of the lock
+        }
+    }
+
     /** Whether a device has been set up here. */
     fun hasDevice(): Boolean = fm.fileExistsAtPath(path(DEVICE))
 
@@ -89,6 +116,9 @@ class FileStorage(private val dir: String, private val sealer: IosSealer) : Stor
 
     companion object {
         private val NAME = Regex("[a-z0-9-]{1,80}")
+
+        /** Read and write for this app alone (0600). */
+        private const val LOCK_MODE = 0x180
         private const val DEVICE = "device"
         private val PROTECTED: Map<Any?, *> = mapOf(NSFileProtectionKey to NSFileProtectionCompleteUntilFirstUserAuthentication)
 

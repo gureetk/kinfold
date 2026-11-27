@@ -23,7 +23,39 @@
 		4B1F0E00000000000000002E /* KinfoldCore.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 4B1F0E00000000000000000F /* KinfoldCore.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		4B1F0E00000000000000002F /* MapLibre in Frameworks */ = {isa = PBXBuildFile; productRef = 4B1F0E000000000000000081 /* MapLibre */; };
 		4B1F0E000000000000000030 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000010 /* assets */; };
+		4B1F0E000000000000000111 /* Shared.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000101 /* Shared.swift */; };
+		4B1F0E000000000000000112 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000102 /* Localizable.strings */; };
+		4B1F0E000000000000000113 /* KinfoldNotifications.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 4B1F0E00000000000000010B /* KinfoldNotifications.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		4B1F0E000000000000000114 /* KinfoldLocation.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 4B1F0E00000000000000010C /* KinfoldLocation.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		4B1F0E000000000000000115 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000105 /* NotificationService.swift */; };
+		4B1F0E000000000000000116 /* Shared.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000101 /* Shared.swift */; };
+		4B1F0E000000000000000117 /* Sealer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000003 /* Sealer.swift */; };
+		4B1F0E000000000000000118 /* EventLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000004 /* EventLog.swift */; };
+		4B1F0E000000000000000119 /* KinfoldCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B1F0E00000000000000000F /* KinfoldCore.xcframework */; };
+		4B1F0E00000000000000011A /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000102 /* Localizable.strings */; };
+		4B1F0E00000000000000011B /* LocationPushService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000108 /* LocationPushService.swift */; };
+		4B1F0E00000000000000011C /* Shared.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000101 /* Shared.swift */; };
+		4B1F0E00000000000000011D /* Sealer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000003 /* Sealer.swift */; };
+		4B1F0E00000000000000011E /* EventLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000004 /* EventLog.swift */; };
+		4B1F0E00000000000000011F /* KinfoldCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B1F0E00000000000000000F /* KinfoldCore.xcframework */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		4B1F0E000000000000000142 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4B1F0E000000000000000061 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4B1F0E000000000000000140;
+			remoteInfo = KinfoldNotifications;
+		};
+		4B1F0E000000000000000143 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4B1F0E000000000000000061 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4B1F0E000000000000000141;
+			remoteInfo = KinfoldLocation;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
 		4B1F0E000000000000000053 /* Embed Frameworks */ = {
@@ -34,6 +66,18 @@
 			name = "Embed Frameworks";
 			files = (
 				4B1F0E00000000000000002E /* KinfoldCore.xcframework in Embed Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4B1F0E000000000000000130 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			name = "Embed Foundation Extensions";
+			files = (
+				4B1F0E000000000000000113 /* KinfoldNotifications.appex in Embed Foundation Extensions */,
+				4B1F0E000000000000000114 /* KinfoldLocation.appex in Embed Foundation Extensions */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -57,6 +101,17 @@
 		4B1F0E00000000000000000F /* KinfoldCore.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = KinfoldCore.xcframework; path = ../../core/build/XCFrameworks/release/KinfoldCore.xcframework; sourceTree = SOURCE_ROOT; };
 		4B1F0E000000000000000010 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; name = assets; path = ../maps/assets; sourceTree = SOURCE_ROOT; };
 		4B1F0E000000000000000011 /* Kinfold.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Kinfold.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4B1F0E000000000000000101 /* Shared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared.swift; sourceTree = "<group>"; };
+		4B1F0E000000000000000103 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
+		4B1F0E000000000000000104 /* Kinfold.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Kinfold.entitlements; sourceTree = "<group>"; };
+		4B1F0E000000000000000105 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		4B1F0E000000000000000106 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		4B1F0E000000000000000107 /* Notifications.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Notifications.entitlements; sourceTree = "<group>"; };
+		4B1F0E000000000000000108 /* LocationPushService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationPushService.swift; sourceTree = "<group>"; };
+		4B1F0E000000000000000109 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		4B1F0E00000000000000010A /* LocationPush.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = LocationPush.entitlements; sourceTree = "<group>"; };
+		4B1F0E00000000000000010B /* KinfoldNotifications.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = KinfoldNotifications.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		4B1F0E00000000000000010C /* KinfoldLocation.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = KinfoldLocation.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -69,6 +124,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		4B1F0E000000000000000132 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B1F0E000000000000000119 /* KinfoldCore.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4B1F0E000000000000000135 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B1F0E00000000000000011F /* KinfoldCore.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -77,8 +148,6 @@
 			children = (
 				4B1F0E000000000000000001 /* KinfoldApp.swift */,
 				4B1F0E000000000000000002 /* Model.swift */,
-				4B1F0E000000000000000003 /* Sealer.swift */,
-				4B1F0E000000000000000004 /* EventLog.swift */,
 				4B1F0E000000000000000005 /* Locator.swift */,
 				4B1F0E000000000000000006 /* Maps.swift */,
 				4B1F0E000000000000000007 /* FamilyMap.swift */,
@@ -88,8 +157,40 @@
 				4B1F0E00000000000000000B /* SettingsViews.swift */,
 				4B1F0E00000000000000000C /* TestDriver.swift */,
 				4B1F0E00000000000000000D /* Info.plist */,
+				4B1F0E000000000000000104 /* Kinfold.entitlements */,
 			);
 			path = Kinfold;
+			sourceTree = "<group>";
+		};
+		4B1F0E000000000000000160 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				4B1F0E000000000000000101 /* Shared.swift */,
+				4B1F0E000000000000000003 /* Sealer.swift */,
+				4B1F0E000000000000000004 /* EventLog.swift */,
+				4B1F0E000000000000000102 /* Localizable.strings */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		4B1F0E000000000000000161 /* Notifications */ = {
+			isa = PBXGroup;
+			children = (
+				4B1F0E000000000000000105 /* NotificationService.swift */,
+				4B1F0E000000000000000106 /* Info.plist */,
+				4B1F0E000000000000000107 /* Notifications.entitlements */,
+			);
+			path = Notifications;
+			sourceTree = "<group>";
+		};
+		4B1F0E000000000000000162 /* LocationPush */ = {
+			isa = PBXGroup;
+			children = (
+				4B1F0E000000000000000108 /* LocationPushService.swift */,
+				4B1F0E000000000000000109 /* Info.plist */,
+				4B1F0E00000000000000010A /* LocationPush.entitlements */,
+			);
+			path = LocationPush;
 			sourceTree = "<group>";
 		};
 		4B1F0E000000000000000041 /* Config */ = {
@@ -120,6 +221,8 @@
 			isa = PBXGroup;
 			children = (
 				4B1F0E000000000000000011 /* Kinfold.app */,
+				4B1F0E00000000000000010B /* KinfoldNotifications.appex */,
+				4B1F0E00000000000000010C /* KinfoldLocation.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -128,6 +231,9 @@
 			isa = PBXGroup;
 			children = (
 				4B1F0E000000000000000040 /* Kinfold */,
+				4B1F0E000000000000000160 /* Shared */,
+				4B1F0E000000000000000161 /* Notifications */,
+				4B1F0E000000000000000162 /* LocationPush */,
 				4B1F0E000000000000000041 /* Config */,
 				4B1F0E000000000000000045 /* Maps */,
 				4B1F0E000000000000000042 /* Frameworks */,
@@ -146,10 +252,13 @@
 				4B1F0E000000000000000051 /* Frameworks */,
 				4B1F0E000000000000000052 /* Resources */,
 				4B1F0E000000000000000053 /* Embed Frameworks */,
+				4B1F0E000000000000000130 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				4B1F0E000000000000000144 /* PBXTargetDependency */,
+				4B1F0E000000000000000145 /* PBXTargetDependency */,
 			);
 			name = Kinfold;
 			packageProductDependencies = (
@@ -158,6 +267,39 @@
 			productName = Kinfold;
 			productReference = 4B1F0E000000000000000011 /* Kinfold.app */;
 			productType = "com.apple.product-type.application";
+		};
+		4B1F0E000000000000000140 /* KinfoldNotifications */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4B1F0E000000000000000150 /* Build configuration list for PBXNativeTarget "KinfoldNotifications" */;
+			buildPhases = (
+				4B1F0E000000000000000131 /* Sources */,
+				4B1F0E000000000000000132 /* Frameworks */,
+				4B1F0E000000000000000133 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = KinfoldNotifications;
+			productName = KinfoldNotifications;
+			productReference = 4B1F0E00000000000000010B /* KinfoldNotifications.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		4B1F0E000000000000000141 /* KinfoldLocation */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4B1F0E000000000000000153 /* Build configuration list for PBXNativeTarget "KinfoldLocation" */;
+			buildPhases = (
+				4B1F0E000000000000000134 /* Sources */,
+				4B1F0E000000000000000135 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = KinfoldLocation;
+			productName = KinfoldLocation;
+			productReference = 4B1F0E00000000000000010C /* KinfoldLocation.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -186,6 +328,8 @@
 			projectRoot = "";
 			targets = (
 				4B1F0E000000000000000060 /* Kinfold */,
+				4B1F0E000000000000000140 /* KinfoldNotifications */,
+				4B1F0E000000000000000141 /* KinfoldLocation */,
 			);
 		};
 /* End PBXProject section */
@@ -196,6 +340,15 @@
 			buildActionMask = 2147483647;
 			files = (
 				4B1F0E000000000000000030 /* assets in Resources */,
+				4B1F0E000000000000000112 /* Localizable.strings in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4B1F0E000000000000000133 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B1F0E00000000000000011A /* Localizable.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -218,10 +371,57 @@
 				4B1F0E00000000000000002A /* HomeViews.swift in Sources */,
 				4B1F0E00000000000000002B /* SettingsViews.swift in Sources */,
 				4B1F0E00000000000000002C /* TestDriver.swift in Sources */,
+				4B1F0E000000000000000111 /* Shared.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4B1F0E000000000000000131 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B1F0E000000000000000115 /* NotificationService.swift in Sources */,
+				4B1F0E000000000000000116 /* Shared.swift in Sources */,
+				4B1F0E000000000000000117 /* Sealer.swift in Sources */,
+				4B1F0E000000000000000118 /* EventLog.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4B1F0E000000000000000134 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B1F0E00000000000000011B /* LocationPushService.swift in Sources */,
+				4B1F0E00000000000000011C /* Shared.swift in Sources */,
+				4B1F0E00000000000000011D /* Sealer.swift in Sources */,
+				4B1F0E00000000000000011E /* EventLog.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		4B1F0E000000000000000144 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4B1F0E000000000000000140 /* KinfoldNotifications */;
+			targetProxy = 4B1F0E000000000000000142 /* PBXContainerItemProxy */;
+		};
+		4B1F0E000000000000000145 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4B1F0E000000000000000141 /* KinfoldLocation */;
+			targetProxy = 4B1F0E000000000000000143 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXVariantGroup section */
+		4B1F0E000000000000000102 /* Localizable.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				4B1F0E000000000000000103 /* en */,
+			);
+			name = Localizable.strings;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
 		4B1F0E000000000000000070 /* Debug */ = {
@@ -252,6 +452,7 @@
 		4B1F0E000000000000000072 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Kinfold/Kinfold.entitlements;
 				INFOPLIST_FILE = Kinfold/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -265,6 +466,7 @@
 		4B1F0E000000000000000073 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Kinfold/Kinfold.entitlements;
 				INFOPLIST_FILE = Kinfold/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -272,6 +474,70 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = ca.gureet.kinfold;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
+		4B1F0E000000000000000151 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Notifications/Notifications.entitlements;
+				INFOPLIST_FILE = Notifications/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ca.gureet.kinfold.notifications;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
+		4B1F0E000000000000000152 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Notifications/Notifications.entitlements;
+				INFOPLIST_FILE = Notifications/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ca.gureet.kinfold.notifications;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
+		4B1F0E000000000000000154 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = LocationPush/LocationPush.entitlements;
+				INFOPLIST_FILE = LocationPush/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ca.gureet.kinfold.location;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
+		4B1F0E000000000000000155 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = LocationPush/LocationPush.entitlements;
+				INFOPLIST_FILE = LocationPush/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ca.gureet.kinfold.location;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
 			};
 			name = Release;
 		};
@@ -292,6 +558,24 @@
 			buildConfigurations = (
 				4B1F0E000000000000000072 /* Debug */,
 				4B1F0E000000000000000073 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4B1F0E000000000000000150 /* Build configuration list for PBXNativeTarget "KinfoldNotifications" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4B1F0E000000000000000151 /* Debug */,
+				4B1F0E000000000000000152 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4B1F0E000000000000000153 /* Build configuration list for PBXNativeTarget "KinfoldLocation" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4B1F0E000000000000000154 /* Debug */,
+				4B1F0E000000000000000155 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

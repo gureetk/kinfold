@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
 package ca.gureet.kinfold.core.client
 
+import ca.gureet.kinfold.core.wire.encode
+import ca.gureet.kinfold.core.wire.readAll
+
 /**
  * Where a [Client] keeps what a device knows between runs: its keys, the server it trusts, each
  * circle's verified log and epoch secrets, its place in the inbox. Each platform decides how the
@@ -22,6 +25,18 @@ interface Storage {
     fun append(name: String, data: ByteArray)
 
     fun delete(name: String)
+
+    /**
+     * The counter [name] holds, or [first] if it holds none, after storing that value plus one.
+     * Where other processes share the files, as an iPhone's app extensions share the app's, the
+     * read and the write happen as one, so that no two processes get the same value. Storage used
+     * by one process at a time can keep this default.
+     */
+    fun next(name: String, first: ULong): ULong {
+        val value = read(name)?.let { readAll(it) { u64() } } ?: first
+        write(name, encode { u64(value + 1UL) })
+        return value
+    }
 }
 
 /** A [Storage] in memory, for tests and for devices that keep nothing. */

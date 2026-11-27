@@ -518,6 +518,18 @@ class Family(private val host: FamilyHost) {
         if (t - dirtySince >= SAVE_EVERY_MS) save()
     }
 
+    /**
+     * Reads the records again, after another process that shares the files wrote them, as an
+     * iPhone's app extensions do. What this process held back is dropped: the files are newer.
+     */
+    suspend fun reload() {
+        lock.withLock {
+            rec = host.storage.read(FILE)?.let { Records.decode(it) } ?: Records()
+            dirtySince = 0
+        }
+        refresh()
+    }
+
     /** Writes what [saveSoon] held back; the service calls it on its rounds and when it stops. */
     suspend fun flush() = lock.withLock { if (dirtySince != 0L) save() }
 
