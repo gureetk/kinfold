@@ -56,7 +56,7 @@ JSON lines, a file per UTC day, kept for 30 days, in the format of the harness's
 | `position` | A family member's position arriving: its age, how long it was in transit, its accuracy |
 | `live_req`, `profile`, `watch`, `silence`, `log` | Live-view requests both ways, profiles, watches, silence alerts, and the circle's log growing |
 | `keepalive`, `state`, `doze`, `saver`, `screen`, `export` | The phone's state: battery, Doze, power saving, the battery exemption, the standby bucket, background restrictions, the network, and how late the watchdog was |
-| `region`, `map` | The region's download (its size and how far it got) and the map: its style loading, and how many features it drew from the world map and from the region at which zoom level |
+| `region`, `map` | The region's download (its size and how far it got) and the map: when it is ready to draw, its style loading, and how many features it drew from the world map and from the region at which zoom level |
 | `refused`, `failed`, `push_dropped`, `notice` | What went wrong. Error messages lose any URL, host name or IP address in them (`log/EventLog.kt`) |
 
 ## Building

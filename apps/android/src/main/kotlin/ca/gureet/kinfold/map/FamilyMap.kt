@@ -81,6 +81,8 @@ fun FamilyMap(people: List<Person>, nowMs: Long, modifier: Modifier = Modifier) 
     val render = remember { RenderLog() }
     LaunchedEffect(view) {
         view.getMapAsync {
+            // MapLibre hands over the map once it has a surface to draw on, which needs the screen.
+            Kinfold.log.write("map", "state" to "ready")
             setUp(it)
             render.watch(view, it)
             map = it

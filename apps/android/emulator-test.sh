@@ -59,6 +59,11 @@ fail() {
     fi
     echo "The app's log:" >&2
     adb logcat -d -s kinfold:I kinfold-test:I AndroidRuntime:E >&2 || true
+    echo "MapLibre's and the graphics' lines:" >&2
+    adb logcat -d 2> /dev/null | grep -i -E 'mbgl|maplibre|egl|gles' | tail -n 60 >&2 || true
+    echo "What the screen shows:" >&2
+    adb shell dumpsys window 2> /dev/null | grep -E 'mCurrentFocus|mFocusedApp|mShowingLockscreen|mDreamingLockscreen|KeyguardShowing|isKeyguardShowing' >&2 || true
+    adb shell dumpsys activity activities 2> /dev/null | grep -E 'ResumedActivity|mLastPausedActivity' >&2 || true
     exit 1
 }
 
@@ -84,6 +89,10 @@ adb logcat -c || true
 adb install -r -g "$apk"
 adb shell pm grant "$pkg" android.permission.ACCESS_BACKGROUND_LOCATION 2> /dev/null || true
 adb shell dumpsys deviceidle whitelist +"$pkg"
+# The map is drawn only where the app shows: the screen on and unlocked until the test turns it off.
+adb shell settings put system screen_off_timeout 1800000
+adb shell input keyevent KEYCODE_WAKEUP
+adb shell wm dismiss-keyguard
 
 case "$role" in
 joiner)
