@@ -145,13 +145,20 @@ class Family(private val host: FamilyHost) {
     }
 
     /**
-     * Keeps up what the others need from this phone: its person's profile whenever someone joins
-     * and at least weekly (§8.6), and, if the person agreed, a silence-watch grant for each other
-     * adult, renewed before it runs out (§14.1).
+     * Keeps up what the others need from this phone: its key bundle, renewed weekly (§4.5,
+     * [Client.renewKeys]); its person's profile whenever someone joins and at least weekly (§8.6);
+     * and, if the person agreed, a silence-watch grant for each other adult, renewed before it runs
+     * out (§14.1).
      */
     suspend fun maintain(why: String) {
         val c = client() ?: return
         if (joining) return
+        attempt("renewing the device's key") {
+            val r = c.renewKeys()
+            if (r.rotated || r.published > 0 || r.dropped > 0) {
+                log("key", "state" to "renewed", "why" to why, "rotated" to r.rotated, "published" to r.published, "dropped" to r.dropped, "kept" to c.keys.retired.size)
+            }
+        }
         val id = c.circles().firstOrNull() ?: return
         val st = c.state(id) ?: return
         if (st.device(c.keys.deviceId) == null) return

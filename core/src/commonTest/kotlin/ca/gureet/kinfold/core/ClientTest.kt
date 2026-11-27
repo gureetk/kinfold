@@ -118,7 +118,43 @@ class ClientTest {
         assertContentEquals(k.identity.publicKey, back.identity.publicKey)
         assertContentEquals(k.encryption.publicKey, back.encryption.publicKey)
         assertFailsWith<ProtocolException> { DeviceKeys.decode(p, k.encode() + byteArrayOf(0)) }
-        assertFailsWith<ProtocolException> { DeviceKeys.decode(p, byteArrayOf(2) + k.encode().copyOfRange(1, k.encode().size)) }
+        assertFailsWith<ProtocolException> { DeviceKeys.decode(p, byteArrayOf(3) + k.encode().copyOfRange(1, k.encode().size)) }
+    }
+
+    @Test
+    fun aRotatedKeyKeepsTheOldOneForAWhile() = sync {
+        val day = 86_400_000UL
+        val now = 1_794_571_200_000UL
+        val k = DeviceKeys.create(p, DeviceKind.PHONE, now)
+        val r = k.rotated(p, now + 7UL * day)
+        // A new encryption key and a two-week bundle for it (§4.5), the same device and account.
+        assertTrue(r.keyId != k.keyId)
+        assertEquals(k.deviceId, r.deviceId)
+        assertTrue(r.bundle.isValidFor(p, r.cert.dskPub, r.accountId))
+        assertTrue(r.bundle.isCurrentAt(now + 7UL * day))
+        assertEquals(DeviceKeys.ROTATED_LIFE_MS, r.bundle.notAfter - r.bundle.notBefore)
+        // Both keys open what was wrapped to them; the old one is retired, last current at the rotation.
+        assertEquals(setOf(k.keyId, r.keyId), r.hpkeKeys.keys)
+        assertContentEquals(k.encryption.publicKey, r.hpkeKeys.getValue(k.keyId).publicKey)
+        assertEquals(listOf(now + 7UL * day), r.retired.map { it.lastCurrentAt })
+        // Kept in storage, retired key and all.
+        val back = DeviceKeys.decode(p, r.encode())
+        assertEquals(r.keyId, back.keyId)
+        assertEquals(setOf(k.keyId, r.keyId), back.hpkeKeys.keys)
+        assertEquals(r.retired.map { it.lastCurrentAt }, back.retired.map { it.lastCurrentAt })
+        // A device kept before keys were retired reads as one with none.
+        val first = k.encode()
+        assertEquals(0, first.last().toInt())
+        val old = DeviceKeys.decode(p, byteArrayOf(1) + first.copyOfRange(1, first.size - 1))
+        assertEquals(k.keyId, old.keyId)
+        assertEquals(emptyList(), old.retired)
+        // 32 days after it was last current the old key goes, unless a log still holds it.
+        val rotatedAt = now + 7UL * day
+        assertEquals(1, r.withRetired(emptySet(), rotatedAt + 31UL * day).retired.size)
+        assertEquals(0, r.withRetired(emptySet(), rotatedAt + 33UL * day).retired.size)
+        val held = r.withRetired(setOf(k.keyId), rotatedAt + 33UL * day)
+        assertEquals(listOf(rotatedAt + 33UL * day), held.retired.map { it.lastCurrentAt })
+        assertTrue(r.withRetired(setOf(k.keyId), rotatedAt + 60_000UL) === r, "no change within the hour")
     }
 
     @Test

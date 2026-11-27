@@ -9,6 +9,7 @@ import ca.gureet.kinfold.core.client.Regions
 import ca.gureet.kinfold.core.client.StreamChange
 import ca.gureet.kinfold.core.client.TransportException
 import ca.gureet.kinfold.core.client.UrlSessionTransport
+import ca.gureet.kinfold.core.client.apnsRegistration
 import ca.gureet.kinfold.core.client.join
 import ca.gureet.kinfold.core.client.monotonicMillis
 import ca.gureet.kinfold.core.client.regionUrl
@@ -20,7 +21,6 @@ import ca.gureet.kinfold.core.crypto.Primitives
 import ca.gureet.kinfold.core.crypto.toByteArray
 import ca.gureet.kinfold.core.identity.SafetyCode
 import ca.gureet.kinfold.core.log.Role
-import ca.gureet.kinfold.core.payload.Json
 import ca.gureet.kinfold.core.push.PushMessage
 import ca.gureet.kinfold.core.push.PushReceipt
 import ca.gureet.kinfold.core.rendezvous.Invite
@@ -262,14 +262,8 @@ class IosApp(dir: String, sealer: IosSealer, private val ios: IosPlatform, priva
     fun registerPush(notify: NSData, locate: NSData?, sandbox: Boolean) {
         scope.launch {
             val c = home.loadClient() ?: return@launch
-            val fields = linkedMapOf<String, Json>(
-                "kind" to Json.Str("apns"),
-                "notify" to Json.Str(Base64Url.encode(notify.toByteArray())),
-            )
-            if (locate != null) fields["locate"] = Json.Str(Base64Url.encode(locate.toByteArray()))
-            fields["environment"] = Json.Str(if (sandbox) "sandbox" else "production")
             try {
-                c.registerPush(Json.Obj(fields))
+                c.registerPush(apnsRegistration(notify.toByteArray(), locate?.toByteArray(), if (sandbox) "sandbox" else "production"))
                 log("push_registration", "state" to "done", "locate" to (locate != null), "environment" to if (sandbox) "sandbox" else "production")
             } catch (e: CancellationException) {
                 throw e
