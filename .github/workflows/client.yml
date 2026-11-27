@@ -66,6 +66,9 @@ jobs:
       # that doesn't match, or a test that fails, fails at once.
       - name: The core's tests on the JVM, against the server
         working-directory: core
+        env:
+          # The world map stands in for a map region, which the test lists and downloads.
+          KINFOLD_TEST_REGION: ${{ github.workspace }}/apps/maps/assets/world.pmtiles
         run: |
           log="$RUNNER_TEMP/client.log"
           for attempt in 1 2 3 4 5; do
@@ -178,6 +181,7 @@ jobs:
         working-directory: core
         env:
           KINFOLD_TEST_TASKS: connectedAndroidDeviceTest
+          KINFOLD_TEST_REGION: ${{ github.workspace }}/apps/maps/assets/world.pmtiles
         run: |
           "$ANDROID_HOME/platform-tools/adb" reverse tcp:8443 tcp:8443
           log="$RUNNER_TEMP/client.log"
@@ -282,6 +286,7 @@ jobs:
         working-directory: core
         env:
           KINFOLD_TEST_TASKS: iosSimulatorArm64Test
+          KINFOLD_TEST_REGION: ${{ github.workspace }}/apps/maps/assets/world.pmtiles
         run: |
           xcrun simctl boot "$SIMULATOR" || true
           xcrun simctl bootstatus "$SIMULATOR" -b

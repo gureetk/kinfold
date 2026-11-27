@@ -6,6 +6,7 @@ import ca.gureet.kinfold.core.client.Client
 import ca.gureet.kinfold.core.client.ClientException
 import ca.gureet.kinfold.core.client.ClientListener
 import ca.gureet.kinfold.core.client.Delivery
+import ca.gureet.kinfold.core.client.HttpRequest
 import ca.gureet.kinfold.core.client.MemoryStorage
 import ca.gureet.kinfold.core.client.Payloads
 import ca.gureet.kinfold.core.client.StreamChange
@@ -15,12 +16,14 @@ import ca.gureet.kinfold.core.client.admit
 import ca.gureet.kinfold.core.client.apnsRegistration
 import ca.gureet.kinfold.core.client.createCircle
 import ca.gureet.kinfold.core.client.decline
+import ca.gureet.kinfold.core.client.downloadRegion
 import ca.gureet.kinfold.core.client.endWatch
 import ca.gureet.kinfold.core.client.grantOf
 import ca.gureet.kinfold.core.client.grantWatch
 import ca.gureet.kinfold.core.client.invite
 import ca.gureet.kinfold.core.client.join
 import ca.gureet.kinfold.core.client.joinAsks
+import ca.gureet.kinfold.core.client.regions
 import ca.gureet.kinfold.core.client.registerWatch
 import ca.gureet.kinfold.core.client.watches
 import ca.gureet.kinfold.core.crypto.Primitives
@@ -30,8 +33,10 @@ import ca.gureet.kinfold.core.rendezvous.Invite
 import ca.gureet.kinfold.core.wire.Bytes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
@@ -227,9 +232,32 @@ class ClientServerTest {
         b2.endWatch(circle, a.keys.accountId)
         assertEquals(emptyList(), a.watches(circle).map { it.watchedDevice })
 
+        // The regions on offer, with the attribution a map drawn from them shows (API.md §13).
+        val regions = a.regions()
+        assertEquals("© OpenStreetMap contributors", regions.attribution)
+        for (r in regions.regions) assertTrue(r.size > 0 && r.etag.length == 45, r.id)
+        // Each one's file, whole, to a device with a session: the file the list describes. The apps
+        // download it into a file; here it is small enough to hold.
+        for (r in regions.regions.filter { it.size <= 16L shl 20 }) {
+            val body = a.downloadRegion(r) { url, headers ->
+                val res = transport.exchange(HttpRequest("GET", url, headers, null, r.size.toInt(), 60_000))
+                assertEquals(200, res.status, r.id)
+                assertEquals(r.etag, res.header("ETag"), r.id)
+                res.body
+            }
+            assertEquals(r.sha256, Bytes.of(p.crypto.sha256(body)), r.id)
+        }
+
         // A session that ends is renewed on the next call.
         a.logout()
         a.sync(circle)
+        // Calls that find the session gone at the same moment share one login, where twelve would
+        // be refused (a device may ask for ten challenges a minute): a session ended here...
+        a.logout()
+        coroutineScope { List(12) { async { a.regions() } }.awaitAll() }
+        // ...and one ended on the server alone, which refuses each call with 401 first.
+        a.api.endSession()
+        coroutineScope { List(12) { async { a.regions() } }.awaitAll() }
 
         // An error carries its status and code: this server holds no Apple key.
         val e = assertFailsWith<ApiException> { b2.registerPush(apnsRegistration(ByteArray(32), null, "sandbox")) }

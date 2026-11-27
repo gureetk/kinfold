@@ -52,6 +52,8 @@ sealed interface Screen {
     data object Settings : Screen
 
     data object LiveAsks : Screen
+
+    data object Maps : Screen
 }
 
 /**
@@ -136,6 +138,7 @@ class MainActivity : ComponentActivity() {
                 onInvite = { go(Screen.ShowInvite) },
                 onHealth = { go(Screen.Health) },
                 onSettings = { go(Screen.Settings) },
+                onMaps = { go(Screen.Maps) },
                 onLive = { Kinfold.scope.launch { Kinfold.family.askForLive(it) } },
                 onWatchAnswer = { on -> Kinfold.scope.launch { Kinfold.family.setWatchConsent(on) } },
                 onJoin = { go(Screen.JoinScan) },
@@ -149,6 +152,7 @@ class MainActivity : ComponentActivity() {
                 onExport = ::export,
             )
             Screen.LiveAsks -> LiveAsksScreen(family, onBack = ::back)
+            Screen.Maps -> MapsScreen(onBack = ::back)
         }
     }
 
@@ -165,7 +169,8 @@ class MainActivity : ComponentActivity() {
         if (stack.size > 1) stack.removeAt(stack.lastIndex) else finish()
     }
 
-    private fun home() {
+    /** The family's home screen alone on the stack: where getting in ends. */
+    internal fun home() {
         Flows.reset()
         stack.clear()
         stack.add(Screen.Home)

@@ -128,7 +128,7 @@ internal class StreamRunner(private val c: Client, private val pingIntervalMs: L
         } catch (e: WebSocketRefused) {
             return when (e.status) {
                 401 -> {
-                    attempt { c.login() }
+                    attempt { c.renewAfter(c.streamSession) }
                     SESSION_ENDED
                 }
                 400 -> {
@@ -158,7 +158,7 @@ internal class StreamRunner(private val c: Client, private val pingIntervalMs: L
             }
         } catch (e: WebSocketClosed) {
             code = e.code
-            if (code == SESSION_ENDED) attempt { c.login() }
+            if (code == SESSION_ENDED) attempt { c.renewAfter(c.streamSession) }
             return code
         } finally {
             c.connection = null

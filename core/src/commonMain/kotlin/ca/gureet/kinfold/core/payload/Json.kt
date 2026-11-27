@@ -6,7 +6,8 @@ import kotlin.math.floor
 
 /**
  * A JSON value as a payload may hold it (PROTOCOL.md §8.1). Every number is whole and at most
- * 2^53 − 1 in magnitude, so numbers are [Long]s.
+ * 2^53 − 1 in magnitude, so numbers are [Long]s. Only a parse with [Limits.fractions], for an
+ * API answer that carries degrees (API.md §13), reads a number with a fraction, as a [Dec].
  */
 sealed class Json {
     /** An object. Its fields keep the order they arrived in; no key appears twice. */
@@ -18,6 +19,13 @@ sealed class Json {
 
         /** The field [key] if it is a number, else null. */
         fun long(key: String): Long? = (fields[key] as? Num)?.value
+
+        /** The field [key] if it is a number, whole or not, else null. */
+        fun double(key: String): Double? = when (val v = fields[key]) {
+            is Num -> v.value.toDouble()
+            is Dec -> v.value
+            else -> null
+        }
     }
 
     data class Arr(val items: List<Json>) : Json()
@@ -25,6 +33,9 @@ sealed class Json {
     data class Str(val value: String) : Json()
 
     data class Num(val value: Long) : Json()
+
+    /** A number with a fraction, which only a parse with [Limits.fractions] gives; never in a payload. */
+    data class Dec(val value: Double) : Json()
 
     data class Bool(val value: Boolean) : Json()
 
@@ -40,7 +51,14 @@ sealed class Json {
      * The limits a parse applies as it reads: nesting depth, UTF-8 bytes in a string (and in a
      * top-level `avatar`), and items in an array.
      */
-    data class Limits(val maxDepth: Int, val maxString: Int, val maxAvatar: Int, val maxArray: Int) {
+    data class Limits(
+        val maxDepth: Int,
+        val maxString: Int,
+        val maxAvatar: Int,
+        val maxArray: Int,
+        /** Whether a number may have a fraction; §8.1 says it may not, and only some API answers have one. */
+        val fractions: Boolean = false,
+    ) {
         companion object {
             /** §8.1, for payloads. */
             val PAYLOAD = Limits(MAX_DEPTH, MAX_STRING, MAX_AVATAR, MAX_ARRAY)
@@ -50,6 +68,9 @@ sealed class Json {
              * except that arrays may be of any length, since a circle may have more than 256 epochs.
              */
             val MESSAGE = Limits(MAX_DEPTH, MAX_STRING, MAX_STRING, Int.MAX_VALUE)
+
+            /** For an API answer with coordinates in degrees, such as a region's bounds (API.md §13): [MESSAGE] with fractions. */
+            val DEGREES = MESSAGE.copy(fractions = true)
         }
     }
 
@@ -127,6 +148,7 @@ sealed class Json {
                 }
                 is Str -> writeString(out, v.value)
                 is Num -> out.append(v.value)
+                is Dec -> out.append(v.value)
                 is Bool -> out.append(v.value)
                 Null -> out.append("null")
             }
@@ -317,9 +339,10 @@ private class Parser(private val s: String, private val limits: Json.Limits) {
 
     /**
      * A number, read as an IEEE 754 double as §8.1 says: it must be whole and within
-     * ±(2^53 − 1), so `1.0` and `1e3` pass and `1.5` doesn't.
+     * ±(2^53 − 1), so `1.0` and `1e3` pass and `1.5` doesn't. With [Json.Limits.fractions], `1.5`
+     * passes too, as a [Json.Dec].
      */
-    private fun number(): Json.Num {
+    private fun number(): Json {
         val start = i
         if (peek() == '-') i++
         when (peek()) {
@@ -339,7 +362,9 @@ private class Parser(private val s: String, private val limits: Json.Limits) {
             digits()
         }
         val d = s.substring(start, i).toDouble()
-        if (!d.isFinite() || d != floor(d) || abs(d) > Json.MAX_INT.toDouble()) refuse()
+        if (!d.isFinite()) refuse()
+        if (d != floor(d)) return if (limits.fractions) Json.Dec(d) else refuse()
+        if (abs(d) > Json.MAX_INT.toDouble()) refuse()
         return Json.Num(d.toLong())
     }
 

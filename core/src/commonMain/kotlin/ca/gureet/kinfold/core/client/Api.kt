@@ -85,6 +85,9 @@ class ServerApi(private val transport: Transport, val url: String, private val c
     @Volatile
     var token: ByteArray? = null
 
+    /** The header that carries the session, for a request made outside this class: none without one. */
+    fun sessionHeaders(): Map<String, String> = token?.let { mapOf("Authorization" to "Bearer " + Base64Url.encode(it)) } ?: emptyMap()
+
     suspend fun discovery(): Discovery {
         val o = obj(call("GET", "/.well-known/kinfold"))
         val api = o["api"] as? Json.Obj ?: malformedAnswer("discovery")
@@ -111,7 +114,7 @@ class ServerApi(private val transport: Transport, val url: String, private val c
     }
 
     suspend fun challenge(deviceId: Bytes): Challenge {
-        val o = obj(call("POST", "/v1/auth/challenge", jsonOf("device_id" to b64(deviceId)), JSON))
+        val o = obj(call("POST", "/v1/auth/challenge", jsonOf("device_id" to b64(deviceId)), JSON, auth = false))
         return Challenge(
             bytesOf(o, "challenge") ?: malformedAnswer("challenge"),
             time(o, "expires_at") ?: malformedAnswer("challenge"),
@@ -121,7 +124,7 @@ class ServerApi(private val transport: Transport, val url: String, private val c
 
     suspend fun session(deviceId: Bytes, challenge: ByteArray, deviceSig: ByteArray): SessionToken {
         val body = jsonOf("device_id" to b64(deviceId), "challenge" to Base64Url.encode(challenge), "device_sig" to Base64Url.encode(deviceSig))
-        val o = obj(call("POST", "/v1/auth/session", body, JSON))
+        val o = obj(call("POST", "/v1/auth/session", body, JSON, auth = false))
         return SessionToken(bytesOf(o, "token") ?: malformedAnswer("session"), time(o, "expires_at") ?: malformedAnswer("session"))
     }
 
@@ -223,6 +226,9 @@ class ServerApi(private val transport: Transport, val url: String, private val c
         call("DELETE", "/v1/invites/${b64(inviteId)}")
     }
 
+    /** The regions the server offers (API.md §13), as the JSON it answered: [Regions.parse] reads it. */
+    suspend fun tiles(): ByteArray = call("GET", "/v1/tiles").body
+
     /** Replaces the device's push registration (API.md §12). */
     suspend fun putPush(registration: Json.Obj) {
         call("PUT", "/v1/push", registration.encode(), JSON)
@@ -233,8 +239,9 @@ class ServerApi(private val transport: Transport, val url: String, private val c
     }
 
     /**
-     * One call: the API revision under `/v1/`, the session, the server's clock taken from
-     * `Kinfold-Time`, and any status outside 2xx thrown as an [ApiException].
+     * One call: the API revision under `/v1/`, the session unless [auth] is false (logging in
+     * sends none), the server's clock taken from `Kinfold-Time`, and any status outside 2xx thrown
+     * as an [ApiException].
      */
     private suspend fun call(
         method: String,
@@ -244,10 +251,11 @@ class ServerApi(private val transport: Transport, val url: String, private val c
         headers: Map<String, String> = emptyMap(),
         max: Int = JSON_MAX,
         waitS: Int = 0,
+        auth: Boolean = true,
     ): HttpResponse {
         val h = LinkedHashMap<String, String>()
         if (path.startsWith("/v1/")) h["Kinfold-Api"] = API_REVISION
-        token?.let { h["Authorization"] = "Bearer " + Base64Url.encode(it) }
+        if (auth) h.putAll(sessionHeaders())
         if (contentType != null) h["Content-Type"] = contentType
         h.putAll(headers)
         val r = transport.exchange(HttpRequest(method, url + path, h, body, max, TIMEOUT_MS + waitS * 1000L))

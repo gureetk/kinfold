@@ -7,21 +7,27 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -37,20 +43,21 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import ca.gureet.kinfold.Kinfold
 import ca.gureet.kinfold.core.wire.Bytes
 import ca.gureet.kinfold.family.Ask
 import ca.gureet.kinfold.family.FamilyState
 import ca.gureet.kinfold.family.Person
+import ca.gureet.kinfold.map.FamilyMap
+import ca.gureet.kinfold.map.Maps
 import ca.gureet.kinfold.qr.Qr
 import ca.gureet.kinfold.share.Health
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.util.Locale
 import kotlin.math.abs
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     family: FamilyState,
@@ -58,6 +65,7 @@ fun HomeScreen(
     onInvite: () -> Unit,
     onHealth: () -> Unit,
     onSettings: () -> Unit,
+    onMaps: () -> Unit,
     onLive: (Bytes) -> Unit,
     onWatchAnswer: (Boolean) -> Unit,
     onJoin: () -> Unit,
@@ -67,55 +75,79 @@ fun HomeScreen(
     val me = family.people.firstOrNull { it.isMe }
     val healthy = remember(resumed, family) { Health.allGood(context) }
     val now by ticking()
-    Page(
-        family.circleName ?: "Kinfold",
-        onBack = null,
-        actions = {
-            if (me?.admin == true) TextButton(onClick = onInvite) { Text("Invite") }
-            Box {
-                TextButton(onClick = { menu = true }) { Text("More") }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(text = { Text("Sharing health") }, onClick = { menu = false; onHealth() })
-                    DropdownMenuItem(text = { Text("Settings") }, onClick = { menu = false; onSettings() })
-                }
-            }
+    val flow by Flows.state.collectAsState()
+    val mapVersion by Maps.changed.collectAsState()
+    val hasRegion = remember(mapVersion) { Maps.file() != null }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(family.circleName ?: "Kinfold") },
+                actions = {
+                    if (me?.admin == true) TextButton(onClick = onInvite) { Text("Invite") }
+                    Box {
+                        TextButton(onClick = { menu = true }) { Text("More") }
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            DropdownMenuItem(text = { Text("Sharing health") }, onClick = { menu = false; onHealth() })
+                            DropdownMenuItem(text = { Text("Map of your area") }, onClick = { menu = false; onMaps() })
+                            DropdownMenuItem(text = { Text("Settings") }, onClick = { menu = false; onSettings() })
+                        }
+                    }
+                },
+            )
         },
-    ) {
-        val flow by Flows.state.collectAsState()
-        if (family.circleId == null) {
-            NoFamily(family, flow, onJoin)
-            return@Page
-        }
-        if (!Kinfold.sharing || !healthy) {
-            Card(
-                onClick = onHealth,
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-            ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(if (!Kinfold.sharing) "You're not sharing your location" else "Sharing needs attention", style = MaterialTheme.typography.titleMedium)
-                    Text(if (!Kinfold.sharing) "Tap to turn sharing on." else "Something sharing depends on is off. Tap to see what.")
+    ) { inner ->
+        Column(Modifier.padding(inner).fillMaxSize()) {
+            if (family.circleId == null) {
+                Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    NoFamily(family, flow, onJoin)
                 }
+                return@Column
             }
-        }
-        if (Kinfold.watchConsent == null && family.people.size > 1) {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Tell your family if your phone goes quiet?", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "If your phone stops sending updates for an hour, your server tells the other adults. It sees only when updates arrive. " +
-                            "You can turn this off at any time in Settings.",
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { onWatchAnswer(true) }) { Text("Yes") }
-                        OutlinedButton(onClick = { onWatchAnswer(false) }) { Text("Not now") }
+            FamilyMap(family.people, now, Modifier.fillMaxWidth().weight(1f))
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 360.dp).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (!Kinfold.sharing || !healthy) {
+                    Card(
+                        onClick = onHealth,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                    ) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(if (!Kinfold.sharing) "You're not sharing your location" else "Sharing needs attention", style = MaterialTheme.typography.titleMedium)
+                            Text(if (!Kinfold.sharing) "Tap to turn sharing on." else "Something sharing depends on is off. Tap to see what.")
+                        }
                     }
                 }
+                if (Kinfold.watchConsent == null && family.people.size > 1) {
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Tell your family if your phone goes quiet?", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "If your phone stops sending updates for an hour, your server tells the other adults. It sees only when updates arrive. " +
+                                    "You can turn this off at any time in Settings.",
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = { onWatchAnswer(true) }) { Text("Yes") }
+                                OutlinedButton(onClick = { onWatchAnswer(false) }) { Text("Not now") }
+                            }
+                        }
+                    }
+                }
+                if (!hasRegion) {
+                    Card(onClick = onMaps, modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Download the map of your area", style = MaterialTheme.typography.titleMedium)
+                            Text("For streets and places. It's kept on this phone, so your server never sees where you look.")
+                        }
+                    }
+                }
+                for (p in family.people) PersonCard(p, now, onLive)
+                if (family.people.size <= 1 && me?.admin == true) {
+                    Text("Nobody else is here yet. Tap Invite and have them scan the code with Kinfold.", style = MaterialTheme.typography.bodyMedium)
+                }
             }
-        }
-        for (p in family.people) PersonCard(p, now, onLive)
-        if (family.people.size <= 1 && me?.admin == true) {
-            Text("Nobody else is here yet. Tap Invite and have them scan the code with Kinfold.", style = MaterialTheme.typography.bodyMedium)
         }
     }
     AsksDialog(family.asks)
@@ -172,9 +204,6 @@ private fun PersonCard(p: Person, nowMs: Long, onLive: (Bytes) -> Unit) {
                     Text(if (p.heardAt != null) "No position yet · heard from ${ago(nowMs, p.heardAt)}" else "No position yet")
                 } else {
                     Text(listOfNotNull(ago(nowMs, s.ts), "±${s.accM} m", s.bat?.let { "$it% battery" + if (s.charging == true) ", charging" else "" }).joinToString(" · "))
-                    SelectionContainer {
-                        Text(String.format(Locale.ROOT, "%.5f, %.5f", s.latE7 / 1e7, s.lonE7 / 1e7), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
-                    }
                 }
                 if (p.watchedByMe) Text("You'll hear if their phone goes quiet.", style = MaterialTheme.typography.bodySmall)
             }

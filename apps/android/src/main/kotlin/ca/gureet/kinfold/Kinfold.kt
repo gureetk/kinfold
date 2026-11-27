@@ -8,7 +8,6 @@ import android.os.Build
 import android.util.Log
 import ca.gureet.kinfold.core.client.Client
 import ca.gureet.kinfold.core.client.OkHttpTransport
-import ca.gureet.kinfold.core.client.Transport
 import ca.gureet.kinfold.core.crypto.Primitives
 import ca.gureet.kinfold.core.crypto.TinkCrypto
 import ca.gureet.kinfold.core.rendezvous.Invite
@@ -17,6 +16,7 @@ import ca.gureet.kinfold.core.wire.Bytes
 import ca.gureet.kinfold.family.Events
 import ca.gureet.kinfold.family.Family
 import ca.gureet.kinfold.log.EventLog
+import ca.gureet.kinfold.log.withoutAddresses
 import ca.gureet.kinfold.share.Notifications
 import ca.gureet.kinfold.share.Probes
 import ca.gureet.kinfold.store.AppStorage
@@ -50,7 +50,7 @@ object Kinfold {
     val p: Primitives by lazy { Primitives(TinkCrypto()) }
 
     /** A test build trusts only its test server's certificate (build.gradle.kts). */
-    val transport: Transport by lazy {
+    val transport: OkHttpTransport by lazy {
         if (isTestBuild) OkHttpTransport.trusting(Base64.getDecoder().decode(BuildConfig.TEST_CA)) else OkHttpTransport()
     }
 
@@ -114,6 +114,20 @@ object Kinfold {
     /** The name this phone gives itself in a profile's device list: its make and model. */
     fun deviceName(): String = "${Build.MANUFACTURER} ${Build.MODEL}"
 
+    /** The map region on the phone, by its ID on the server, or null. */
+    var regionId: String?
+        get() = prefs.getString("region_id", null)
+        set(v) = prefs.edit().putString("region_id", v).apply()
+
+    /** The region's name and SHA-256 (base64url), for the screen and to resume its download. */
+    var regionName: String?
+        get() = prefs.getString("region_name", null)
+        set(v) = prefs.edit().putString("region_name", v).apply()
+
+    var regionSha: String?
+        get() = prefs.getString("region_sha", null)
+        set(v) = prefs.edit().putString("region_sha", v).apply()
+
     /** Whether the person has turned sharing on; the watchdog and a reboot keep it going until they stop it. */
     var sharing: Boolean
         get() = prefs.getBoolean("sharing", false)
@@ -137,5 +151,6 @@ object Kinfold {
 
     fun id(b: Bytes): String = Base64Url.encode(b.toByteArray())
 
-    fun describe(e: Throwable): String = e::class.java.simpleName + (e.message?.let { ": " + it.take(200) } ?: "")
+    /** An error, for the log and the screen: its kind and its message without addresses ([withoutAddresses]). */
+    fun describe(e: Throwable): String = e::class.java.simpleName + (e.message?.let { ": " + withoutAddresses(it).take(200) } ?: "")
 }

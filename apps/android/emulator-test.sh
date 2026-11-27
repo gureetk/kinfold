@@ -10,8 +10,10 @@
 #            which joins; the phone lets it in.
 #
 # Either way the phone names itself, agrees to a silence watch, and shares while the emulator walks
-# north; it answers the harness's live-view requests, awake and then in deep Doze. The harness's log
-# must show all of it, and the phone's own log must hold no coordinate.
+# north; it downloads the map region the server offers (KINFOLD_TEST_REGION, which test-with-server.sh
+# hands the server) and draws the map from it; it answers the harness's live-view requests, awake and
+# then in deep Doze. The harness's log must show all of it, and the phone's own log must hold no
+# coordinate.
 #
 # Run it through core/test-with-server.sh, which builds and starts the server, from apps/android/:
 #
@@ -39,7 +41,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 here=$(cd "$(dirname "$0")" && pwd)
-gradle --console=plain -p "$here" assembleRelease -Pkinfold.cacert="$KINFOLD_CACERT" "$@"
+gradle --console=plain -p "$here" assembleRelease -Pkinfold.cacert="$KINFOLD_CACERT" -Pkinfold.abis=x86_64 "$@"
 gradle --console=plain -p "$here/../../spikes" :harness:installDist "$@"
 harness="$here/../../spikes/harness/build/install/kinfold-harness/bin/kinfold-harness"
 apk="$here/build/outputs/apk/release/kinfold-android-release.apk"
@@ -57,6 +59,11 @@ fail() {
     fi
     echo "The app's log:" >&2
     adb logcat -d -s kinfold:I kinfold-test:I AndroidRuntime:E >&2 || true
+    echo "MapLibre's and the graphics' lines:" >&2
+    adb logcat -d 2> /dev/null | grep -i -E 'mbgl|maplibre|egl|gles' | tail -n 60 >&2 || true
+    echo "What the screen shows:" >&2
+    adb shell dumpsys window 2> /dev/null | grep -E 'mCurrentFocus|mFocusedApp|mShowingLockscreen|mDreamingLockscreen|KeyguardShowing|isKeyguardShowing' >&2 || true
+    adb shell dumpsys activity activities 2> /dev/null | grep -E 'ResumedActivity|mLastPausedActivity' >&2 || true
     exit 1
 }
 
@@ -82,6 +89,10 @@ adb logcat -c || true
 adb install -r -g "$apk"
 adb shell pm grant "$pkg" android.permission.ACCESS_BACKGROUND_LOCATION 2> /dev/null || true
 adb shell dumpsys deviceidle whitelist +"$pkg"
+# The map is drawn only where the app shows: the screen on and unlocked until the test turns it off.
+adb shell settings put system screen_off_timeout 1800000
+adb shell input keyevent KEYCODE_WAKEUP
+adb shell wm dismiss-keyguard
 
 case "$role" in
 joiner)
@@ -89,12 +100,12 @@ joiner)
     code=$("$harness" invite --data "$data" --cacert "$KINFOLD_CACERT" | grep -o 'KFI0[A-Za-z0-9_-]*' | head -n 1)
     [ -n "$code" ] || fail "no invite code from the harness"
     run_harness
-    adb shell am start -n "$pkg/.ui.MainActivity" --es invite "$code" --es name "Test-phone" --ez watch true --ez share true
+    adb shell am start -n "$pkg/.ui.MainActivity" --es invite "$code" --es name "Test-phone" --ez watch true --ez share true --ez region true
     await journal '"e":"joined"' 120
     ;;
 creator)
     adb shell am start -n "$pkg/.ui.MainActivity" --es setup "$KINFOLD_SETUP" --es circle "Test-family" --es name "Test-phone" \
-        --ez admit true --ez watch true --ez share true
+        --ez admit true --ez watch true --ez share true --ez region true
     waited=0
     code=
     until [ -n "$code" ]; do
@@ -124,6 +135,10 @@ esac
 ) &
 walker_pid=$!
 
+# The region, downloaded whole and checked, then the map drawn from it and from the world map
+# inside the app, with features from both.
+await applog '"e":"region".*"state":"done"' 180
+await applog '"e":"map".*"state":"(rendered|idle)".*"region":true.*"world_features":[1-9][0-9]*.*"region_features":[1-9]' 120
 await journal '"e":"profile"' 120
 await journal '"e":"watch"' 120
 await journal '"e":"loc".*"moved_m"' 180
