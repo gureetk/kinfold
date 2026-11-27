@@ -238,9 +238,19 @@ class Client private constructor(
      * Logs in (§13.2): the device signs the server's challenge only after checking that the key it
      * trusts signed it. Then puts the push registration and the watches again (API.md §5).
      */
-    suspend fun login() {
-        loginLock.withLock {
-            api.token = null
+    suspend fun login() = renew(stale = null, force = true)
+
+    /**
+     * Logs in, unless another call has done so since [stale] was the session (or [force]). Calls
+     * that find the session missing, ending or refused at the same moment then share one login,
+     * rather than each signing a challenge of its own, which the server allows only a few times a
+     * minute. The old session stays in use until the new one replaces it, so calls already under
+     * way keep theirs.
+     */
+    private suspend fun renew(stale: ByteArray?, force: Boolean = false) {
+        val renewed = loginLock.withLock {
+            val current = api.token
+            if (!force && current != null && current !== stale && !sessionEnding()) return@withLock false
             val ch = api.challenge(keys.deviceId)
             if (!Login.isChallengeSigned(p, serverKey, ch.challenge, keys.deviceId, ch.expiresAt, ch.sig)) {
                 throw ClientException("the server's login challenge isn't signed by its key")
@@ -248,9 +258,19 @@ class Client private constructor(
             val s = api.session(keys.deviceId, ch.challenge, Login.deviceSig(p, keys.signing, serverKey, ch.challenge, keys.deviceId))
             api.token = s.token
             sessionExpiresAt = s.expiresAt
+            true
         }
-        afterLogin()
+        if (renewed) afterLogin()
     }
+
+    private fun sessionEnding(): Boolean = clock.now() + SESSION_MARGIN_MS >= sessionExpiresAt
+
+    /** Logs in again after the server refused [stale], unless another call already has. */
+    internal suspend fun renewAfter(stale: ByteArray?) = renew(stale)
+
+    /** The session the stream last opened with, so that its end renews that one alone. */
+    @Volatile
+    internal var streamSession: ByteArray? = null
 
     /** Ends the session on the server. */
     suspend fun logout() {
@@ -260,12 +280,16 @@ class Client private constructor(
 
     /** Runs [call] with a session, logging in first when there is none or it is about to end, and once more on 401. */
     internal suspend fun <T> authed(call: suspend () -> T): T {
-        if (api.token == null || clock.now() + SESSION_MARGIN_MS >= sessionExpiresAt) login()
+        var used = api.token
+        if (used == null || sessionEnding()) {
+            renew(used)
+            used = api.token
+        }
         val result = try {
             call()
         } catch (e: ApiException) {
             if (e.status != 401) throw e
-            login()
+            renew(used)
             call()
         }
         saveClock()
@@ -596,8 +620,10 @@ class Client private constructor(
 
     /** Opens one stream connection from the device's cursor. */
     internal suspend fun openStream(pingIntervalMs: Long): WebSocket {
-        if (api.token == null || clock.now() + SESSION_MARGIN_MS >= sessionExpiresAt) login()
+        val before = api.token
+        if (before == null || sessionEnding()) renew(before)
         val token = api.token ?: throw ClientException("no session")
+        streamSession = token
         val since = cursor()
         val url = "wss://" + serverUrl.removePrefix("https://") + "/v1/stream" + (since?.let { "?since=" + percentEncode(it) } ?: "")
         val headers = mapOf("Authorization" to "Bearer " + Base64Url.encode(token), "Kinfold-Api" to ServerApi.API_REVISION)

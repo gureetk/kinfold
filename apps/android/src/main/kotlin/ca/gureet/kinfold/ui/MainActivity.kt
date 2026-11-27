@@ -169,7 +169,8 @@ class MainActivity : ComponentActivity() {
         if (stack.size > 1) stack.removeAt(stack.lastIndex) else finish()
     }
 
-    private fun home() {
+    /** The family's home screen alone on the stack: where getting in ends. */
+    internal fun home() {
         Flows.reset()
         stack.clear()
         stack.add(Screen.Home)

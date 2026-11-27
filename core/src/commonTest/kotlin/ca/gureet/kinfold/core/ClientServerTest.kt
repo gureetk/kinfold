@@ -33,8 +33,10 @@ import ca.gureet.kinfold.core.rendezvous.Invite
 import ca.gureet.kinfold.core.wire.Bytes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
@@ -249,6 +251,13 @@ class ClientServerTest {
         // A session that ends is renewed on the next call.
         a.logout()
         a.sync(circle)
+        // Calls that find the session gone at the same moment share one login, where twelve would
+        // be refused (a device may ask for ten challenges a minute): a session ended here...
+        a.logout()
+        coroutineScope { List(12) { async { a.regions() } }.awaitAll() }
+        // ...and one ended on the server alone, which refuses each call with 401 first.
+        a.api.endSession()
+        coroutineScope { List(12) { async { a.regions() } }.awaitAll() }
 
         // An error carries its status and code: this server holds no Apple key.
         val e = assertFailsWith<ApiException> { b2.registerPush(apnsRegistration(ByteArray(32), null, "sandbox")) }
