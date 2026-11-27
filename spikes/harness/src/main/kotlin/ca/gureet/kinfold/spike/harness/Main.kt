@@ -141,9 +141,13 @@ private suspend fun join(data: Path, args: Args) {
     if (storage.read("device") != null) fail("$data already holds a device; give another --data")
     val invite = Invite.fromCode(code.trim())
     val client = Client.forInvite(p, transport(), storage, invite)
+    // Joining reads the inbox while it waits for the welcome, and what the phone sends the new
+    // member meanwhile (its profile, a watch grant) comes with it: the harness takes those as run does.
+    val log = EventLog(data.resolve("logs"), echo = false)
+    client.listener = Harness(client, invite.circleId, log)
     println("Asking to join ${invite.circleName}; the phone that made the invite lets the harness in.")
     val joined = client.join(invite, args.string("name") ?: "Kinfold harness", timeoutMs = args.duration("timeout", 600_000L))
-    EventLog(data.resolve("logs"), echo = false).write(client.clock.now(), "joined", "circle" to id(joined.circleId), "details_matched" to joined.detailsMatched)
+    log.write(client.clock.now(), "joined", "circle" to id(joined.circleId), "details_matched" to joined.detailsMatched)
     println("Joined the circle ${id(joined.circleId)} as device ${id(client.keys.deviceId)}.")
 }
 
