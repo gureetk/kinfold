@@ -27,10 +27,13 @@ import ca.gureet.kinfold.core.client.regions
 import ca.gureet.kinfold.core.client.registerWatch
 import ca.gureet.kinfold.core.client.watches
 import ca.gureet.kinfold.core.crypto.Primitives
+import ca.gureet.kinfold.core.envelope.Envelope
 import ca.gureet.kinfold.core.envelope.EnvelopeHeader
+import ca.gureet.kinfold.core.envelope.Envelopes
 import ca.gureet.kinfold.core.identity.SafetyCode
 import ca.gureet.kinfold.core.rendezvous.Invite
 import ca.gureet.kinfold.core.wire.Bytes
+import ca.gureet.kinfold.core.wire.encode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -226,6 +229,33 @@ class ClientServerTest {
         aSaw.delivery { it.payload.long("lat") == 490_000_000L }
         bStream = launch { b2.runStream(pingIntervalMs = 2_000) }
         b2Saw.streamOpen()
+
+        // B makes a new encryption key (§4.5) and publishes it with UPDATE_KEY; A's view of the
+        // circle shows it once A catches up, and A's next envelope is wrapped to it.
+        val before = assertNotNull(a.state(circle))
+        val renewal = b2.renewKeys(force = true)
+        assertTrue(renewal.rotated)
+        assertEquals(1, renewal.published)
+        val oldKey = assertNotNull(before.device(b2.keys.deviceId)).keyId
+        assertTrue(oldKey != b2.keys.keyId)
+        a.sync(circle)
+        assertEquals(b2.keys.keyId, a.state(circle)!!.device(b2.keys.deviceId)!!.keyId)
+        a.send(circle, Payloads.loc(a.clock.now(), 489_000_000, -1_228_000_000, 20))
+        assertEquals(489_000_000L, b2Saw.delivery { it.payload.long("lat") == 489_000_000L }.payload.long("lat"))
+        // An envelope sealed on A's view from before, to B's old key, as one in flight would be,
+        // still opens: B keeps the retired key.
+        val stale = EnvelopeHeader(EnvelopeHeader.CIRCLE, circle, a.keys.deviceId, 1_000_000UL, a.clock.now(), Client.DEFAULT_TTL_S, before.head)
+        val inFlight = Envelope.seal(p, a.keys.signing, stale, Envelopes.circleRecipients(before, a.keys.deviceId), Payloads.loc(a.clock.now(), 488_000_000, -1_227_000_000, 20).encode())
+        assertTrue(Envelope.parse(inFlight).wraps.any { it.keyId == oldKey })
+        b2.receive(encode {
+            u64(a.clock.now())
+            bytes(inFlight)
+        })
+        b2Saw.delivery { it.payload.long("lat") == 488_000_000L }
+        // The retired key is kept in storage, for the next start; nothing is due again yet.
+        assertEquals(listOf(oldKey), assertNotNull(Client.load(p, transport, bStorage)).keys.retired.map { it.keyId })
+        val again = b2.renewKeys()
+        assertTrue(!again.rotated && again.published == 0 && again.dropped == 0)
 
         // B ends A's watch, as its person may at any time; ending it again changes nothing.
         b2.endWatch(circle, a.keys.accountId)

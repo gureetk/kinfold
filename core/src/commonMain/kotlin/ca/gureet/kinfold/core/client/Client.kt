@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
 package ca.gureet.kinfold.core.client
 
+import ca.gureet.kinfold.core.Protocol
 import ca.gureet.kinfold.core.ProtocolException
 import ca.gureet.kinfold.core.Reason
 import ca.gureet.kinfold.core.crypto.Primitives
@@ -11,8 +12,11 @@ import ca.gureet.kinfold.core.envelope.Receipt
 import ca.gureet.kinfold.core.envelope.ReplayRecord
 import ca.gureet.kinfold.core.identity.DeviceKind
 import ca.gureet.kinfold.core.identity.IdentityChain
+import ca.gureet.kinfold.core.log.Body
 import ca.gureet.kinfold.core.log.CircleState
 import ca.gureet.kinfold.core.log.Device
+import ca.gureet.kinfold.core.log.EntryHeader
+import ca.gureet.kinfold.core.log.EntryType
 import ca.gureet.kinfold.core.log.LogEntry
 import ca.gureet.kinfold.core.log.MemberLog
 import ca.gureet.kinfold.core.log.Outcome
@@ -57,6 +61,12 @@ class Delivery(
     /** This device's trusted time when it opened the envelope. */
     val openedAt: ULong,
 )
+
+/**
+ * What [Client.renewKeys] did: whether it made a new encryption key, in how many circles it
+ * published the current bundle, and how many retired keys it dropped.
+ */
+class KeyRenewal(val rotated: Boolean, val published: Int, val dropped: Int)
 
 /** A silence alert (PROTOCOL.md §14.1): [watchedDevice] has been quiet since [lastSeenAt], 0 if the server doesn't know. */
 class SilenceAlert(val circleId: Bytes, val watchedDevice: Bytes, val lastSeenAt: ULong, val sentAt: ULong)
@@ -144,9 +154,14 @@ class Client private constructor(
     /** The server's address and key, which the device trusts since it was set up (§13.1). */
     val serverUrl: String,
     val serverKey: Bytes,
-    val keys: DeviceKeys,
+    keys: DeviceKeys,
 ) {
     val api: ServerApi = ServerApi(transport, serverUrl, clock)
+
+    /** The device's keys; a new encryption key replaces the current one each week ([renewKeys]). */
+    @Volatile
+    var keys: DeviceKeys = keys
+        private set
 
     /** Set before [start]. */
     @Volatile
@@ -434,6 +449,68 @@ class Client private constructor(
         }
         throw ClientException("the circle's log kept moving while this device appended to it")
     }
+
+    // ---- keys ----
+
+    /**
+     * Keeps this device's key bundle fresh (§4.5), and costs nothing when there's nothing to do:
+     *
+     * - once the bundle is a week old by trusted time heard from the server, a new encryption key
+     *   and a two-week bundle for it ([DeviceKeys.rotated]), stored before anything is sent;
+     * - `UPDATE_KEY` with the current bundle in every circle whose log holds an older one of this
+     *   device, so that senders wrap to the new key and the server seals pushes to it;
+     * - each retired key kept while a log still holds it, then 32 days more, then dropped.
+     *
+     * [force] rotates now, for tests. The device's app calls this on its rounds; an extension
+     * doesn't. A circle the append fails in is tried again next time, and its log keeps the old
+     * key, which the device still holds.
+     */
+    suspend fun renewKeys(force: Boolean = false): KeyRenewal {
+        val now = clock.now()
+        var rotated = false
+        val dropped = lock.withLock {
+            val k = keys
+            val age = if (now > k.bundle.notBefore) now - k.bundle.notBefore else 0UL
+            var next = k
+            if (clock.hasHeard && (force || age >= ROTATE_EVERY_MS)) {
+                next = k.rotated(p, now)
+                rotated = true
+            }
+            val inLogs = views.values.mapNotNull { it.state.device(k.deviceId)?.keyId }.toSet()
+            next = next.withRetired(inLogs, now)
+            if (next !== k) {
+                // Stored first: a crash after an UPDATE_KEY must not lose the private key it names.
+                storage.write(Names.DEVICE, next.encode())
+                keys = next
+            }
+            (k.retired.size + (if (rotated) 1 else 0)) - next.retired.size
+        }
+        var published = 0
+        for (id in circles()) {
+            val due = lock.withLock {
+                val stale = views[id]?.state?.device(keys.deviceId)?.let { it.keyId != keys.keyId } ?: false
+                val failedAt = publishFailedAt[id]
+                stale && (force || failedAt == null || monotonicMillis() - failedAt >= PUBLISH_RETRY_MS)
+            }
+            if (!due) continue
+            val ok = attempt {
+                appendEntry(id) { state, _ ->
+                    val header = EntryHeader(
+                        Protocol.VERSION, Protocol.SUITE, EntryType.UPDATE_KEY.code, id, (state.seq + 1).toULong(), state.head,
+                        clock.now(), keys.deviceId, state.epoch,
+                    )
+                    LogEntry.build(p, keys.signing, header, Body.UpdateKey(keys.bundle).encode())
+                }
+            }
+            lock.withLock { if (ok.isSuccess) publishFailedAt.remove(id) else publishFailedAt[id] = monotonicMillis() }
+            ok.exceptionOrNull()?.let { listener.failed("publishing the device's new key", it) }
+            if (ok.isSuccess) published++
+        }
+        return KeyRenewal(rotated, published, dropped)
+    }
+
+    /** When publishing a bundle last failed in each circle, on the monotonic clock: tried again after [PUBLISH_RETRY_MS]. Under [lock]. */
+    private val publishFailedAt = HashMap<Bytes, Long>()
 
     // ---- sending ----
 
@@ -746,6 +823,11 @@ class Client private constructor(
     companion object {
         /** Envelopes live a day unless the sender says otherwise. */
         const val DEFAULT_TTL_S = 86_400L
+
+        /** A device makes a new encryption key and bundle each week (§4.5). */
+        const val ROTATE_EVERY_MS: ULong = 604_800_000UL
+
+        private const val PUBLISH_RETRY_MS = 15 * 60_000L
 
         /** A ping a minute: well inside the 35 minutes after which the server closes a quiet stream. */
         const val DEFAULT_PING_MS = 60_000L
