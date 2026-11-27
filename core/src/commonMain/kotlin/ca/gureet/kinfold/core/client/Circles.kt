@@ -17,6 +17,7 @@ import ca.gureet.kinfold.core.log.Rules
 import ca.gureet.kinfold.core.payload.Json
 import ca.gureet.kinfold.core.push.WatchGrant
 import ca.gureet.kinfold.core.rendezvous.Invite
+import ca.gureet.kinfold.core.rendezvous.JoinRequestContents
 import ca.gureet.kinfold.core.rendezvous.Joining
 import ca.gureet.kinfold.core.rendezvous.RendezvousException
 import ca.gureet.kinfold.core.wire.Base64Url
@@ -114,44 +115,94 @@ suspend fun Client.pendingInvites(): List<PendingInvite> = lock.withLock {
 }
 
 /**
- * Admits the first person waiting on [pending] whose request checks out (§9.2): opens the request,
- * appends `ADD_MEMBER` with exactly the invite's salt and terms, sends `welcome` to the new device
- * and posts the result. An app shows the name and the safety code and waits for the person to tap
- * Allow before calling this; a test harness calls it at once. Null when nobody is waiting.
+ * Someone asking to join with [PendingInvite]'s invite, whose request checked out (§9.2): the name
+ * they gave, and the keys the inviter's app needs for the safety code (§11) before the person taps
+ * Allow. [name] is what the invitee typed; nothing verifies it.
  */
-suspend fun Client.admit(pending: PendingInvite, asAdmin: Boolean = false): Admitted? {
-    val invite = pending.invite
+class JoinAsk internal constructor(
+    val name: String,
+    val accountId: Bytes,
+    val deviceId: Bytes,
+    /** The invitee's identity key, for [ca.gureet.kinfold.core.identity.SafetyCode]. */
+    val ikPub: Bytes,
+    internal val contents: JoinRequestContents,
+)
+
+/**
+ * The requests waiting on [pending] that check out (§9.2), opened but not acted on, so that an app
+ * can show each name and safety code first. A request that doesn't check out is reported to the
+ * listener and left out. Empty when nobody is waiting; [ApiException] with 410 once the invite has
+ * ended, after which it is forgotten.
+ */
+suspend fun Client.joinAsks(pending: PendingInvite): List<JoinAsk> {
     val requests = try {
         authed { api.joinRequests(pending.inviteId) }
     } catch (e: ApiException) {
         if (e.status == 410) forgetInvite(pending.inviteId)
         throw e
     }
-    for (msg in requests) {
-        val req = try {
-            Joining.openRequest(p, invite, msg, clock.now())
+    return requests.mapNotNull { msg ->
+        try {
+            val req = Joining.openRequest(p, pending.invite, msg, clock.now())
+            JoinAsk(req.name, req.cert.accountId, req.cert.deviceId(p), req.cert.ikPub, req)
         } catch (e: RendezvousException) {
             listener.failed("opening a join request", e)
-            continue
+            null
         }
-        val deviceId = req.cert.deviceId(p)
-        val entry = appendEntry(invite.circleId) { state, secrets ->
-            val secret = secrets[state.epoch] ?: throw ClientException("this device lacks the circle's current epoch secret")
-            val header = EntryHeader(
-                Protocol.VERSION, Protocol.SUITE, EntryType.ADD_MEMBER.code, invite.circleId, (state.seq + 1).toULong(), state.head,
-                clock.now(), keys.deviceId, state.epoch,
-            )
-            val details = Details.seal(p, secret, header.encode(), Details.encodeMember(invite.termsSalt.toByteArray(), invite.terms))
-            val body = Body.AddMember(req.cert, req.chain, req.bundle, pending.inviteId, req.termsCommit, req.consent, asAdmin, details)
-            LogEntry.build(p, keys.signing, header, body.encode())
-        }
-        val head = LogEntry.hash(p, entry)
-        send(invite.circleId, Payloads.welcome(secrets(invite.circleId), head), to = listOf(deviceId), wake = Wake.NOTIFY)
-        authed { api.putJoinResult(pending.inviteId, Joining.result(p, invite.secret, Joining.ADDED, head)) }
-        forgetInvite(pending.inviteId)
-        return Admitted(req.cert.accountId, deviceId, req.name)
     }
-    return null
+}
+
+/**
+ * Admits [ask] (§9.2), once the person has seen its name and safety code and tapped Allow: appends
+ * `ADD_MEMBER` with exactly the invite's salt and terms, sends `welcome` to the new device and
+ * posts the result. The invite is used up.
+ */
+suspend fun Client.admit(pending: PendingInvite, ask: JoinAsk, asAdmin: Boolean = false): Admitted {
+    val invite = pending.invite
+    val req = ask.contents
+    val entry = appendEntry(invite.circleId) { state, secrets ->
+        val secret = secrets[state.epoch] ?: throw ClientException("this device lacks the circle's current epoch secret")
+        val header = EntryHeader(
+            Protocol.VERSION, Protocol.SUITE, EntryType.ADD_MEMBER.code, invite.circleId, (state.seq + 1).toULong(), state.head,
+            clock.now(), keys.deviceId, state.epoch,
+        )
+        val details = Details.seal(p, secret, header.encode(), Details.encodeMember(invite.termsSalt.toByteArray(), invite.terms))
+        val body = Body.AddMember(req.cert, req.chain, req.bundle, pending.inviteId, req.termsCommit, req.consent, asAdmin, details)
+        LogEntry.build(p, keys.signing, header, body.encode())
+    }
+    val head = LogEntry.hash(p, entry)
+    send(invite.circleId, Payloads.welcome(secrets(invite.circleId), head), to = listOf(ask.deviceId), wake = Wake.NOTIFY)
+    authed { api.putJoinResult(pending.inviteId, Joining.result(p, invite.secret, Joining.ADDED, head)) }
+    forgetInvite(pending.inviteId)
+    return Admitted(ask.accountId, ask.deviceId, ask.name)
+}
+
+/**
+ * Admits the first person waiting on [pending] whose request checks out, without asking anyone:
+ * for a test harness. An app uses [joinAsks] and shows each one before [admit]. Null when nobody
+ * is waiting.
+ */
+suspend fun Client.admit(pending: PendingInvite, asAdmin: Boolean = false): Admitted? =
+    joinAsks(pending).firstOrNull()?.let { admit(pending, it, asAdmin) }
+
+/**
+ * Turns down whoever is waiting on [pending] (§9.3): posts a declined result, so the invitee stops
+ * waiting, and forgets the invite. An invite answers only once, so it is over; the server keeps
+ * the result for a day, long enough for the invitee to read it (API.md §9), and then ends it.
+ */
+suspend fun Client.decline(pending: PendingInvite) {
+    authed { api.putJoinResult(pending.inviteId, Joining.result(p, pending.invite.secret, Joining.DECLINED, Bytes.of(ByteArray(32)))) }
+    forgetInvite(pending.inviteId)
+}
+
+/** Ends [pending] before anyone uses it: the server deletes it, and this device forgets it. */
+suspend fun Client.endInvite(pending: PendingInvite) {
+    try {
+        authed { api.deleteInvite(pending.inviteId) }
+    } catch (e: ApiException) {
+        if (e.status != 404 && e.status != 410) throw e
+    }
+    forgetInvite(pending.inviteId)
 }
 
 /**
@@ -258,6 +309,19 @@ suspend fun Client.registerWatch(grant: WatchGrant) {
 
 /** The watches this account holds in [circleId], and those on its devices (API.md §8). */
 suspend fun Client.watches(circleId: Bytes): List<WatchInfo> = authed { api.watches(circleId) }
+
+/**
+ * Ends [watcher]'s watch on this device (API.md §8), as its person may at any time (§14.1). The
+ * server then refuses every grant this device issued before now, so the watcher can't bring the
+ * watch back with one it kept. Nothing happens if there was no such watch.
+ */
+suspend fun Client.endWatch(circleId: Bytes, watcher: Bytes) {
+    try {
+        authed { api.deleteWatch(circleId, keys.deviceId, watcher) }
+    } catch (e: ApiException) {
+        if (e.status != 404) throw e
+    }
+}
 
 /** The grant a `watch_grant` payload carries, or null if it carries none that parses. */
 fun grantOf(payload: Json.Obj): WatchGrant? {

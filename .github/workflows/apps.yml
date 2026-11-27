@@ -1,0 +1,185 @@
+# SPDX-License-Identifier: CC0-1.0
+name: Apps
+
+# The apps (apps/): the Android app built, unit-tested and checked by Android Lint, then run in
+# emulators against a server built from server/, with the spikes' harness as the other family
+# member (apps/android/emulator-test.sh). The app builds the core from core/, so changes there, in
+# server/ and in the harness start this too.
+on:
+  # Branches are tested through their pull requests; pushes only on main.
+  push:
+    branches: [main]
+    paths: ["apps/android/**", "core/**", "server/**", "spikes/harness/**", "spikes/*.gradle.kts", "spikes/gradle/**", ".github/workflows/apps.yml"]
+  pull_request:
+    paths: ["apps/android/**", "core/**", "server/**", "spikes/harness/**", "spikes/*.gradle.kts", "spikes/gradle/**", ".github/workflows/apps.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  # The build that goes on the phones: no test certificate in it.
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # Gradle's downloads, kept from run to run so that a run asks Maven Central for little: it
+      # turns busy runners away. Gradle checks every artifact against verification-metadata.xml
+      # whether it was downloaded or kept, so a kept one can't change what a build uses.
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.gradle/caches/modules-2
+          key: gradle-${{ github.workflow }}-${{ github.job }}-${{ runner.os }}-${{ hashFiles('**/gradle/verification-metadata.xml') }}
+          restore-keys: gradle-${{ github.workflow }}-${{ github.job }}-${{ runner.os }}-
+
+      - name: Gradle 9.9.1, checked against its published SHA-256
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/gradle.zip" https://services.gradle.org/distributions/gradle-9.9.1-bin.zip
+          echo "d8a18a7a841dd5df825d35a685fad6f2d7f12ac0c280e57b67c27b4a520ba228  $RUNNER_TEMP/gradle.zip" | sha256sum -c
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-9.9.1/bin" >> "$GITHUB_PATH"
+
+      # sdkmanager checks each package against the checksum in Google's repository index. Compose
+      # asks for platform 37.1; the core, with OkHttp, for 37.0.
+      - name: Android platforms 37.0 and 37.1, and build tools 36.0.0
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-37.0" "platforms;android-37.1" "build-tools;36.0.0" > /dev/null
+
+      # Every artifact is checked against apps/android/gradle/verification-metadata.xml. Maven
+      # Central sometimes answers 429, so a failed download is tried again after a pause; a hash
+      # that doesn't match, a test that fails or a lint finding fails at once.
+      - name: The app's unit tests, Android Lint and its APK
+        working-directory: apps/android
+        run: |
+          log="$RUNNER_TEMP/app.log"
+          for attempt in 1 2 3 4 5; do
+            if gradle --no-daemon --console=plain testDebugUnitTest lintRelease assembleRelease > "$log" 2>&1; then
+              cat "$log"
+              break
+            fi
+            cat "$log"
+            if grep -q -E "Dependency verification failed|There were failing tests|Compilation error|Kotlin compiler|Lint found" "$log"; then exit 1; fi
+            [ "$attempt" = 5 ] && exit 1
+            sleep $((attempt * 60))
+          done
+          cat build/reports/lint-results-release.txt
+          ls -l build/outputs/apk/release/kinfold-android-release.apk
+
+  # The app in an emulator, against a server and the harness: on the oldest Android the core
+  # supports it joins the harness's family, and on a recent one it founds the family itself.
+  android-emulator:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api: 29
+            role: joiner
+          - api: 36
+            role: creator
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache: false
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # Gradle's downloads, kept from run to run so that a run asks Maven Central for little: it
+      # turns busy runners away. Gradle checks every artifact against verification-metadata.xml
+      # whether it was downloaded or kept, so a kept one can't change what a build uses.
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.gradle/caches/modules-2
+          key: gradle-${{ github.workflow }}-${{ github.job }}-${{ runner.os }}-${{ hashFiles('**/gradle/verification-metadata.xml') }}
+          restore-keys: gradle-${{ github.workflow }}-${{ github.job }}-${{ runner.os }}-
+
+      - name: Gradle 9.9.1, checked against its published SHA-256
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/gradle.zip" https://services.gradle.org/distributions/gradle-9.9.1-bin.zip
+          echo "d8a18a7a841dd5df825d35a685fad6f2d7f12ac0c280e57b67c27b4a520ba228  $RUNNER_TEMP/gradle.zip" | sha256sum -c
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-9.9.1/bin" >> "$GITHUB_PATH"
+
+      - name: The server's modules
+        working-directory: server
+        run: |
+          go mod download
+          go mod verify
+
+      - name: KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # sdkmanager checks each package against the checksum in Google's repository index.
+      - name: Android ${{ matrix.api }} emulator
+        env:
+          API: ${{ matrix.api }}
+        run: |
+          sdk="$ANDROID_HOME/cmdline-tools/latest/bin"
+          "$sdk/sdkmanager" --install "platforms;android-37.0" "platforms;android-37.1" "build-tools;36.0.0" "platform-tools" "emulator" "system-images;android-$API;default;x86_64" > /dev/null
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          # avdmanager and the emulator look for AVDs in different places on the runner unless told one.
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo no | "$sdk/avdmanager" create avd --force -n kinfold -k "system-images;android-$API;default;x86_64"
+          adb="$ANDROID_HOME/platform-tools/adb"
+          # Start adb first: it makes the key the emulator hands the device, so adb is let in.
+          "$adb" start-server
+          "$ANDROID_HOME/emulator/emulator" -avd kinfold -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel on > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          emulator=$!
+          for i in $(seq 1 120); do
+            [ $((i % 12)) = 0 ] && "$adb" devices
+            if ! kill -0 "$emulator" 2> /dev/null; then
+              echo "The emulator stopped:"
+              cat "$RUNNER_TEMP/emulator.log"
+              exit 1
+            fi
+            if [ "$(timeout 10 "$adb" shell getprop sys.boot_completed 2> /dev/null | tr -d '\r')" = 1 ]; then
+              echo "Booted after about $((i * 5)) seconds"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "The emulator didn't boot in 10 minutes:"
+          cat "$RUNNER_TEMP/emulator.log"
+          exit 1
+
+      # Every artifact is checked against the builds' verification-metadata.xml. The builds run
+      # first on their own, because Maven Central sometimes answers 429: a failed download is tried
+      # again after a pause, and a hash that doesn't match fails at once. The test then runs once.
+      - name: The app on Android ${{ matrix.api }} as the ${{ matrix.role }}, against a server and the harness
+        working-directory: apps/android
+        env:
+          KINFOLD_TEST_DIR: .
+          KINFOLD_TEST_CMD: ./emulator-test.sh
+          KINFOLD_TEST_ROLE: ${{ matrix.role }}
+        run: |
+          log="$RUNNER_TEMP/build.log"
+          for attempt in 1 2 3 4 5; do
+            if gradle --no-daemon --console=plain assembleRelease > "$log" 2>&1 && gradle --no-daemon --console=plain -p ../../spikes :harness:installDist >> "$log" 2>&1; then break; fi
+            cat "$log"
+            if grep -q -E "Dependency verification failed|Compilation error|Kotlin compiler|Lint found" "$log"; then exit 1; fi
+            [ "$attempt" = 5 ] && exit 1
+            sleep $((attempt * 60))
+          done
+          adb reverse tcp:8443 tcp:8443
+          ../../core/test-with-server.sh --no-daemon

@@ -17,3 +17,5 @@ spikes/ios/Config/Local.xcconfig
 spikes/ios/build/
 xcuserdata/
 *.xcodeproj/project.xcworkspace/
+apps/android/build/
+*.hprof

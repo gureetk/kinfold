@@ -29,7 +29,6 @@ dependencyResolutionManagement {
 rootProject.name = "kinfold-spikes"
 
 include(":harness")
-include(":android")
 
 // The shared core, built from source: a spike always runs the core of its own commit.
 includeBuild("../core") {

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception -->
+<resources>
+    <!-- Compose draws everything; the window only needs a background while the app starts. -->
+    <style name="Theme.Kinfold" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/cream</item>
+    </style>
+
+    <color name="cream">#FFF6EC</color>
+    <color name="tangerine">#E8701F</color>
+</resources>

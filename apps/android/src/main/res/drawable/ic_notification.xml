@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception -->
+<!-- A plain swallow-tail mark for the status bar: one colour, as Android draws it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,3c-1.6,2.4 -4.3,4.2 -8,4.6c1.4,1.4 3.2,2.2 5.1,2.4L5,21l7,-5l7,5l-4.1,-11c1.9,-0.2 3.7,-1 5.1,-2.4c-3.7,-0.4 -6.4,-2.2 -8,-4.6z" />
+</vector>
