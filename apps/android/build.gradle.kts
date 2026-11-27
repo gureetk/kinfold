@@ -32,6 +32,23 @@ android {
         // person does everything on the screen.
         val testCa = providers.gradleProperty("kinfold.cacert").orNull?.let { Base64.getEncoder().encodeToString(File(it).readBytes()) } ?: ""
         buildConfigField("String", "TEST_CA", "\"$testCa\"")
+        // MapLibre's native library, for the phones' processors only (13 MB each); an emulator
+        // test adds its own with -Pkinfold.abis=x86_64.
+        ndk {
+            abiFilters += (providers.gradleProperty("kinfold.abis").orNull ?: "arm64-v8a").split(',')
+        }
+    }
+
+    // The map's style, glyphs and world map, which both apps carry (../maps).
+    sourceSets {
+        getByName("main") {
+            assets.srcDir("../maps/assets")
+        }
+    }
+
+    // MapLibre reads a PMTiles archive in pieces, which an archive compressed inside the APK can't give.
+    androidResources {
+        noCompress += "pmtiles"
     }
 
     buildFeatures {
@@ -71,6 +88,9 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     // Compose inside an Activity, and the launchers that ask for permissions
     implementation("androidx.activity:activity-compose:1.13.0")
+    // The map, drawn from the world map inside the app and the region downloaded from the server,
+    // both PMTiles archives on the phone. The OpenGL ES build, which every phone and emulator draws.
+    implementation("org.maplibre.gl:android-sdk-opengl:13.8.0")
     // QR codes, drawn and read on the phone: the invite, and the server's setup code
     implementation("com.google.zxing:core:3.5.4")
     // kotlin.test on JUnit 4, the runner Android's host tests use

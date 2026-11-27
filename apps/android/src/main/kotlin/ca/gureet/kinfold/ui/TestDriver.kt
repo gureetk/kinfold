@@ -5,6 +5,7 @@ import android.content.Intent
 import android.util.Log
 import ca.gureet.kinfold.Kinfold
 import ca.gureet.kinfold.core.rendezvous.Invite
+import ca.gureet.kinfold.map.Maps
 import ca.gureet.kinfold.share.SharingService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -22,6 +23,7 @@ import kotlinx.coroutines.withContext
  * - `--es invite CODE`: join with that invite, agreeing to its terms;
  * - `--es name NAME` and `--es circle NAME`: the names to use;
  * - `--ez watch true`: agree to silence watches;
+ * - `--ez region true`: download the first map region the server offers;
  * - `--ez share true`: turn sharing on.
  *
  * A build for the phones has none of this: [Kinfold.isTestBuild] is false there.
@@ -36,6 +38,7 @@ object TestDriver {
         val admit = intent.getBooleanExtra("admit", false)
         val watch = intent.getBooleanExtra("watch", false)
         val share = intent.getBooleanExtra("share", false)
+        val region = intent.getBooleanExtra("region", false)
         if (setup == null && invite == null && !share) return
         Kinfold.scope.launch {
             try {
@@ -64,6 +67,12 @@ object TestDriver {
                     if (watch) Kinfold.family.setWatchConsent(true)
                 }
                 if (share) withContext(Dispatchers.Main) { SharingService.turnOn(activity) }
+                if (region) {
+                    Maps.list()
+                    val offer = Maps.ui.first { it is Maps.State.Offer || it is Maps.State.Failed }
+                    val first = (offer as? Maps.State.Offer)?.regions?.firstOrNull() ?: error("no region on offer")
+                    Maps.download(first)
+                }
             } catch (e: Exception) {
                 Kinfold.log.write("test", "state" to "failed", "error" to Kinfold.describe(e))
             }

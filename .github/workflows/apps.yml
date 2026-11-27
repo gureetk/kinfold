@@ -3,15 +3,16 @@ name: Apps
 
 # The apps (apps/): the Android app built, unit-tested and checked by Android Lint, then run in
 # emulators against a server built from server/, with the spikes' harness as the other family
-# member (apps/android/emulator-test.sh). The app builds the core from core/, so changes there, in
-# server/ and in the harness start this too.
+# member (apps/android/emulator-test.sh), and the map files they carry (apps/maps) made again from
+# their sources. The app builds the core from core/, so changes there, in server/ and in the
+# harness start this too.
 on:
   # Branches are tested through their pull requests; pushes only on main.
   push:
     branches: [main]
-    paths: ["apps/android/**", "core/**", "server/**", "spikes/harness/**", "spikes/*.gradle.kts", "spikes/gradle/**", ".github/workflows/apps.yml"]
+    paths: ["apps/android/**", "apps/maps/**", "core/**", "server/**", "spikes/harness/**", "spikes/*.gradle.kts", "spikes/gradle/**", ".github/workflows/apps.yml"]
   pull_request:
-    paths: ["apps/android/**", "core/**", "server/**", "spikes/harness/**", "spikes/*.gradle.kts", "spikes/gradle/**", ".github/workflows/apps.yml"]
+    paths: ["apps/android/**", "apps/maps/**", "core/**", "server/**", "spikes/harness/**", "spikes/*.gradle.kts", "spikes/gradle/**", ".github/workflows/apps.yml"]
 
 permissions:
   contents: read
@@ -172,6 +173,8 @@ jobs:
           KINFOLD_TEST_DIR: .
           KINFOLD_TEST_CMD: ./emulator-test.sh
           KINFOLD_TEST_ROLE: ${{ matrix.role }}
+          # The world map stands in for a region: the app downloads it from the server and draws it.
+          KINFOLD_TEST_REGION: ${{ github.workspace }}/apps/maps/assets/world.pmtiles
         run: |
           log="$RUNNER_TEMP/build.log"
           for attempt in 1 2 3 4 5; do
@@ -183,3 +186,49 @@ jobs:
           done
           adb reverse tcp:8443 tcp:8443
           ../../core/test-with-server.sh --no-daemon
+
+  # The map files the apps carry (apps/maps), made again from their sources and compared: the style
+  # byte for byte, the world map tile for tile (check.py: zlib and zlib-ng compress differently),
+  # and the glyphs byte for byte with the commit they were taken from. Each source is fetched by
+  # commit, and world.py checks the SHA-256 of every file it reads.
+  maps:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: The style
+        working-directory: apps/maps
+        run: |
+          python3 -I style.py "$RUNNER_TEMP/style.json"
+          cmp "$RUNNER_TEMP/style.json" assets/style.json
+
+      - name: The world map, from Natural Earth 5.1.2
+        run: |
+          ne="$RUNNER_TEMP/ne"
+          git init -q "$ne"
+          git -C "$ne" remote add origin https://github.com/nvkelso/natural-earth-vector.git
+          git -C "$ne" sparse-checkout set --no-cone $(python3 -I apps/maps/world.py --inputs | sed 's|^|/geojson/|')
+          git -C "$ne" fetch -q --depth 1 --filter=blob:none origin f1890d9f152c896d250a77557a5751a93d494776
+          git -C "$ne" checkout -q FETCH_HEAD
+          python3 -I apps/maps/world.py "$ne/geojson" "$RUNNER_TEMP/world.pmtiles"
+          python3 -I apps/maps/check.py "$RUNNER_TEMP/world.pmtiles" apps/maps/assets/world.pmtiles
+          if cmp -s "$RUNNER_TEMP/world.pmtiles" apps/maps/assets/world.pmtiles; then echo "and the same bytes"; fi
+
+      - name: The glyphs, from protomaps/basemaps-assets
+        run: |
+          assets="$RUNNER_TEMP/assets"
+          git init -q "$assets"
+          git -C "$assets" remote add origin https://github.com/protomaps/basemaps-assets.git
+          git -C "$assets" sparse-checkout set --no-cone "/fonts/Noto Sans Regular/" "/fonts/Noto Sans Medium/" "/fonts/Noto Sans Italic/" /fonts/OFL.txt
+          git -C "$assets" fetch -q --depth 1 --filter=blob:none origin 028c18f713baecad011301ff7a69acc39bcc2ae7
+          git -C "$assets" checkout -q FETCH_HEAD
+          cd apps/maps/assets/glyphs
+          n=0
+          for f in */*.pbf OFL.txt; do
+            cmp "$f" "$assets/fonts/$f"
+            n=$((n + 1))
+          done
+          echo "$n files the same"

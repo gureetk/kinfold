@@ -85,6 +85,9 @@ class ServerApi(private val transport: Transport, val url: String, private val c
     @Volatile
     var token: ByteArray? = null
 
+    /** The header that carries the session, for a request made outside this class: none without one. */
+    fun sessionHeaders(): Map<String, String> = token?.let { mapOf("Authorization" to "Bearer " + Base64Url.encode(it)) } ?: emptyMap()
+
     suspend fun discovery(): Discovery {
         val o = obj(call("GET", "/.well-known/kinfold"))
         val api = o["api"] as? Json.Obj ?: malformedAnswer("discovery")
@@ -223,6 +226,9 @@ class ServerApi(private val transport: Transport, val url: String, private val c
         call("DELETE", "/v1/invites/${b64(inviteId)}")
     }
 
+    /** The regions the server offers (API.md §13), as the JSON it answered: [Regions.parse] reads it. */
+    suspend fun tiles(): ByteArray = call("GET", "/v1/tiles").body
+
     /** Replaces the device's push registration (API.md §12). */
     suspend fun putPush(registration: Json.Obj) {
         call("PUT", "/v1/push", registration.encode(), JSON)
@@ -247,7 +253,7 @@ class ServerApi(private val transport: Transport, val url: String, private val c
     ): HttpResponse {
         val h = LinkedHashMap<String, String>()
         if (path.startsWith("/v1/")) h["Kinfold-Api"] = API_REVISION
-        token?.let { h["Authorization"] = "Bearer " + Base64Url.encode(it) }
+        h.putAll(sessionHeaders())
         if (contentType != null) h["Content-Type"] = contentType
         h.putAll(headers)
         val r = transport.exchange(HttpRequest(method, url + path, h, body, max, TIMEOUT_MS + waitS * 1000L))

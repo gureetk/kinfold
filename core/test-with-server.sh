@@ -14,6 +14,7 @@
 # spikes' harness, for one, with KINFOLD_TEST_DIR=../spikes KINFOLD_TEST_TASKS=:harness:test.
 # KINFOLD_TEST_CMD runs a command instead of Gradle, in KINFOLD_TEST_DIR, with the server's URL,
 # the setup code and the authority's certificate file in KINFOLD_SERVER, KINFOLD_SETUP and KINFOLD_CACERT.
+# KINFOLD_TEST_REGION, a PMTiles file, makes the server offer it as the map region "test" (API.md §13).
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -62,6 +63,9 @@ until curl -fsS --cacert "$work/ca.pem" "$url/healthz" > /dev/null 2>&1; do
 done
 
 "$work/kinfold" settings --member-tokens on --data "$work/data" > /dev/null
+if [ -n "${KINFOLD_TEST_REGION:-}" ]; then
+    "$work/kinfold" region add test "$KINFOLD_TEST_REGION" --name "Test region" --data "$work/data" > /dev/null
+fi
 code=$("$work/kinfold" setup --data "$work/data" | grep -o 'KFS0[A-Za-z0-9_-]*' | head -n 1)
 [ -n "$code" ] || { echo "No setup code" >&2; exit 1; }
 

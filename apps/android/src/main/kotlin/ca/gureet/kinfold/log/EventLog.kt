@@ -90,3 +90,18 @@ class EventLog(private val dir: File, private val mirror: ((String) -> Unit)?, p
         const val KEEP_DAYS = 30L
     }
 }
+
+/**
+ * [message] with every address in it replaced: URLs by `<url>`, IP addresses by `<ip>` and host
+ * names by `<host>`, each with its port. Errors from the network name the server they failed to
+ * reach ("Failed to connect to …", "Unable to resolve host …"), and a log says what went wrong
+ * without saying where.
+ */
+fun withoutAddresses(message: String): String = ADDRESSES.fold(message) { s, (pattern, by) -> pattern.replace(s, by) }
+
+private val ADDRESSES = listOf(
+    Regex("""[A-Za-z][A-Za-z0-9+.-]*://\S+""") to "<url>",
+    Regex("""\[?(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?:%[A-Za-z0-9]+)?\]?(?::\d+)?""") to "<ip>",
+    Regex("""\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b""") to "<ip>",
+    Regex("""\b(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}\b(?::\d+)?""") to "<host>",
+)

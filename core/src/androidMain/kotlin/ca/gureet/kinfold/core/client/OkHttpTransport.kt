@@ -3,8 +3,12 @@ package ca.gureet.kinfold.core.client
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.ConnectionSpec
@@ -18,7 +22,10 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
+import java.security.MessageDigest
 import java.security.KeyStore
 import java.security.cert.CertificateFactory
 import java.util.concurrent.TimeUnit
@@ -110,6 +117,92 @@ class OkHttpTransport(trustManager: X509TrustManager = systemTrust()) : Transpor
         return socket
     }
 
+    /**
+     * Downloads [url] whole into [file] (API.md §13): a map region, fetched once and drawn from the
+     * phone, with [headers], the session's, from `Client.downloadRegion`. A file already there, from
+     * a download that stopped, is resumed with `Range: bytes=N-` and `If-Range` set to [etag], the
+     * region's `sha256` in quotes, so a region replaced meanwhile comes back whole from the start.
+     * When the download ends, the file's SHA-256 must be [sha256]; otherwise the file is deleted and
+     * [TransportException] thrown. A session the server no longer knows is an [ApiException] with
+     * status 401, for the client to log in again. [progress] gets the bytes on the phone and the
+     * file's size as they grow. Cancelling stops it, and leaves the file to resume.
+     */
+    suspend fun download(
+        url: String,
+        headers: Map<String, String>,
+        file: File,
+        sha256: ByteArray,
+        etag: String,
+        progress: (Long, Long) -> Unit = { _, _ -> },
+    ) {
+        withContext(Dispatchers.IO) {
+            val have = if (file.isFile) file.length() else 0L
+            val b = Request.Builder().url(url).header("Accept-Encoding", "identity")
+            for ((k, v) in headers) b.header(k, v)
+            if (have > 0) b.header("Range", "bytes=$have-").header("If-Range", etag)
+            val call = downloads.newCall(b.build())
+            val job = coroutineContext[Job]
+            val cancel = job?.invokeOnCompletion { if (it != null) call.cancel() }
+            try {
+                call.execute().use { r ->
+                    val append = when {
+                        r.code == 206 && have > 0 && r.header("Content-Range")?.startsWith("bytes $have-") == true -> true
+                        r.code == 200 -> false
+                        r.code == 401 -> throw ApiException(401, "unauthorized", "the session has ended")
+                        r.code == 416 -> {
+                            // Already whole, or longer than the region now is: start again.
+                            file.delete()
+                            throw TransportException("the download can't resume; it starts again next time")
+                        }
+                        else -> throw TransportException("the region's download was answered with ${r.code}")
+                    }
+                    val length = r.body.contentLength()
+                    val total = if (length < 0) -1 else if (append) have + length else length
+                    var done = if (append) have else 0L
+                    FileOutputStream(file, append).use { out ->
+                        val buffer = ByteArray(64 * 1024)
+                        r.body.byteStream().use { input ->
+                            var reported = 0L
+                            while (true) {
+                                job?.ensureActive()
+                                val n = input.read(buffer)
+                                if (n < 0) break
+                                out.write(buffer, 0, n)
+                                done += n
+                                if (done - reported >= PROGRESS_EVERY || done == total) {
+                                    progress(done, total)
+                                    reported = done
+                                }
+                            }
+                        }
+                        out.fd.sync()
+                    }
+                    if (total >= 0 && done != total) throw TransportException("the region's download ended early")
+                }
+            } catch (e: IOException) {
+                throw TransportException("the region's download failed: ${describe(e)}", e)
+            } finally {
+                cancel?.dispose()
+            }
+            val md = MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    md.update(buffer, 0, n)
+                }
+            }
+            if (!MessageDigest.isEqual(md.digest(), sha256)) {
+                file.delete()
+                throw TransportException("the region's file isn't the one the server listed: its SHA-256 differs")
+            }
+        }
+    }
+
+    /** For downloads: like [client], but a read that stalls for a minute fails, so the download can resume. */
+    private val downloads: OkHttpClient by lazy { client.newBuilder().readTimeout(60, TimeUnit.SECONDS).build() }
+
     /** An OkHttp WebSocket as a [WebSocket]: whole binary messages in order, and the close code at the end. */
     private class Socket : WebSocketListener(), WebSocket {
         private val incoming = Channel<ByteArray>(Channel.UNLIMITED)
@@ -200,6 +293,9 @@ class OkHttpTransport(trustManager: X509TrustManager = systemTrust()) : Transpor
 
     companion object {
         private const val CONNECT_TIMEOUT_S = 15L
+
+        /** A download tells of its progress about every megabyte. */
+        private const val PROGRESS_EVERY = 1L shl 20
         private const val UPGRADE_TIMEOUT_S = 15L
         private const val CLOSE_WAIT_S = 5L
 
