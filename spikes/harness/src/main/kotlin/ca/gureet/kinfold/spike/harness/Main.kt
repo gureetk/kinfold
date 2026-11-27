@@ -8,10 +8,12 @@ import ca.gureet.kinfold.core.client.Transport
 import ca.gureet.kinfold.core.client.admit
 import ca.gureet.kinfold.core.client.createCircle
 import ca.gureet.kinfold.core.client.invite
+import ca.gureet.kinfold.core.client.join
 import ca.gureet.kinfold.core.client.pendingInvites
 import ca.gureet.kinfold.core.client.watches
 import ca.gureet.kinfold.core.crypto.Primitives
 import ca.gureet.kinfold.core.crypto.TinkCrypto
+import ca.gureet.kinfold.core.rendezvous.Invite
 import ca.gureet.kinfold.core.wire.Base64Url
 import ca.gureet.kinfold.core.wire.Bytes
 import kotlinx.coroutines.delay
@@ -25,6 +27,8 @@ import kotlin.system.exitProcess
 private const val USAGE = """kinfold-harness: the other family member for Kinfold's spikes
 
   kinfold-harness setup CODE [--circle NAME]   set up from a setup code (kinfold setup) and create the test circle
+  kinfold-harness join INVITE [--name NAME]     or join a phone's circle with its invite (KFI0…), waiting
+                                                up to --timeout 10m for the phone to let it in
   kinfold-harness invite [--valid 24h] [--wait] print an invite code for a phone, while run runs or not;
                                                 --wait lets the phone in here, only when run isn't running
   kinfold-harness run [options]                 stay in the circle: let phones in, register their watches, ask for
@@ -106,6 +110,7 @@ fun main(argv: Array<String>) {
         runBlocking {
             when (command) {
                 "setup" -> setup(data, args)
+                "join" -> join(data, args)
                 "invite" -> invite(data, args)
                 "run" -> run(data, args)
                 "status" -> status(data)
@@ -128,6 +133,18 @@ private suspend fun setup(data: Path, args: Args) {
     val circle = client.createCircle(args.string("circle") ?: "Spikes")
     println("Set up on ${client.serverUrl} as device ${id(client.keys.deviceId)}, and created the circle ${id(circle)}.")
     println("Next: kinfold-harness invite, for each phone.")
+}
+
+private suspend fun join(data: Path, args: Args) {
+    val code = args.words.firstOrNull() ?: fail("join needs the invite code a phone shows (KFI0…)")
+    val storage = FileStorage(data)
+    if (storage.read("device") != null) fail("$data already holds a device; give another --data")
+    val invite = Invite.fromCode(code.trim())
+    val client = Client.forInvite(p, transport(), storage, invite)
+    println("Asking to join ${invite.circleName}; the phone that made the invite lets the harness in.")
+    val joined = client.join(invite, args.string("name") ?: "Kinfold harness", timeoutMs = args.duration("timeout", 600_000L))
+    EventLog(data.resolve("logs"), echo = false).write(client.clock.now(), "joined", "circle" to id(joined.circleId), "details_matched" to joined.detailsMatched)
+    println("Joined the circle ${id(joined.circleId)} as device ${id(client.keys.deviceId)}.")
 }
 
 private suspend fun loaded(data: Path): Pair<Client, Bytes> {

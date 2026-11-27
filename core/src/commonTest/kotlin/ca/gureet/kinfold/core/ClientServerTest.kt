@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
 package ca.gureet.kinfold.core
 
-import ca.gureet.kinfold.core.client.Admitted
 import ca.gureet.kinfold.core.client.ApiException
 import ca.gureet.kinfold.core.client.Client
+import ca.gureet.kinfold.core.client.ClientException
 import ca.gureet.kinfold.core.client.ClientListener
 import ca.gureet.kinfold.core.client.Delivery
 import ca.gureet.kinfold.core.client.MemoryStorage
@@ -14,14 +14,20 @@ import ca.gureet.kinfold.core.client.Wake
 import ca.gureet.kinfold.core.client.admit
 import ca.gureet.kinfold.core.client.apnsRegistration
 import ca.gureet.kinfold.core.client.createCircle
+import ca.gureet.kinfold.core.client.decline
+import ca.gureet.kinfold.core.client.endWatch
 import ca.gureet.kinfold.core.client.grantOf
 import ca.gureet.kinfold.core.client.grantWatch
 import ca.gureet.kinfold.core.client.invite
 import ca.gureet.kinfold.core.client.join
+import ca.gureet.kinfold.core.client.joinAsks
 import ca.gureet.kinfold.core.client.registerWatch
+import ca.gureet.kinfold.core.client.watches
 import ca.gureet.kinfold.core.crypto.Primitives
 import ca.gureet.kinfold.core.envelope.EnvelopeHeader
+import ca.gureet.kinfold.core.identity.SafetyCode
 import ca.gureet.kinfold.core.rendezvous.Invite
+import ca.gureet.kinfold.core.wire.Bytes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -56,8 +62,9 @@ expect fun skip(why: String)
  * The client layer against a real server, built from `server/` and started with TLS by
  * `test-with-server.sh`, over each platform's own transport. Skipped without a server.
  *
- * Two devices go through what the spikes need: setting up from a setup code, a circle, an invite
- * and a join, envelopes both ways on the stream, a watch grant, a live-view request with `locate`,
+ * Two devices go through what the apps need: setting up from a setup code, a circle, an invite
+ * and a join, shown with its name and safety code before it is allowed, and another turned down,
+ * envelopes both ways on the stream, a watch grant and its end, a live-view request with `locate`,
  * an alert fetched from the inbox, a restart from storage, a session that ends, and an error.
  */
 class ClientServerTest {
@@ -66,6 +73,11 @@ class ClientServerTest {
         val deliveries = Channel<Delivery>(Channel.UNLIMITED)
         val connected = Channel<Unit>(Channel.UNLIMITED)
         val failures = Channel<String>(Channel.UNLIMITED)
+        val logs = Channel<Long>(Channel.UNLIMITED)
+
+        override suspend fun logChanged(circleId: Bytes, seq: Long) {
+            logs.send(seq)
+        }
 
         override suspend fun delivered(delivery: Delivery) {
             deliveries.send(delivery)
@@ -86,6 +98,10 @@ class ClientServerTest {
         }
 
         suspend fun streamOpen() = withTimeout(WAIT_MS) { connected.receive() }
+
+        suspend fun logAt(seq: Long) = withTimeout(WAIT_MS) {
+            while (logs.receive() < seq) continue
+        }
 
         fun failed(): List<String> = generateSequence { failures.tryReceive().getOrNull() }.toList()
     }
@@ -119,13 +135,23 @@ class ClientServerTest {
         val bSaw = Recorder()
         b.listener = bSaw
         val joining = async { b.join(invite, "B", timeoutMs = 60_000) }
-        var admitted: Admitted? = null
-        while (admitted == null) {
-            admitted = a.admit(pending)
-            if (admitted == null) delay(200)
+        // A sees who asks, with the keys for the safety code both screens show, before allowing it.
+        var asks = a.joinAsks(pending)
+        while (asks.isEmpty()) {
+            delay(200)
+            asks = a.joinAsks(pending)
         }
+        val ask = asks.single()
+        assertEquals("B", ask.name)
+        assertEquals(b.keys.deviceId, ask.deviceId)
+        assertEquals(b.keys.accountId, ask.accountId)
+        val aKey = a.keys.identity.publicKey
+        val bKey = b.keys.identity.publicKey
+        assertEquals(SafetyCode.code(p, bKey, aKey), SafetyCode.code(p, ask.ikPub.toByteArray(), aKey))
+        val admitted = a.admit(pending, ask)
         assertEquals(b.keys.deviceId, admitted.deviceId)
         assertEquals("B", admitted.name)
+        aSaw.logAt(1)
         val joined = joining.await()
         assertEquals(circle, joined.circleId)
         assertTrue(joined.detailsMatched)
@@ -133,6 +159,16 @@ class ClientServerTest {
         assertEquals("Family", bState.name)
         assertEquals(2, bState.members.size)
         assertEquals(a.state(circle)!!.head, bState.head)
+
+        // C asks to join with another invite, and A turns it down: C's join ends, and C is in no circle.
+        val second = a.invite(circle, "Family", "A")
+        val c = Client.forInvite(p, transport, MemoryStorage(), Invite.fromCode(second.code))
+        val cJoining = async { assertFailsWith<ClientException> { c.join(Invite.fromCode(second.code), "C", timeoutMs = 60_000) } }
+        while (a.joinAsks(second).isEmpty()) delay(200)
+        a.decline(second)
+        assertEquals("the inviter declined", cJoining.await().message)
+        assertEquals(emptyList(), c.circles())
+        assertEquals(2, a.state(circle)!!.members.size)
 
         // Both keep a stream open.
         val aStream = launch { a.runStream(pingIntervalMs = 2_000) }
@@ -144,6 +180,7 @@ class ClientServerTest {
         a.send(circle, Payloads.loc(a.clock.now(), 492_827_000, -1_231_207_000, 12))
         val fromA = bSaw.delivery { it.payload.string("t") == "loc" }
         assertEquals(492_827_000L, fromA.payload.long("lat"))
+        assertTrue(fromA.seq > 0UL)
         assertEquals(a.keys.deviceId, fromA.sender.id)
         assertEquals(EnvelopeHeader.CIRCLE, fromA.kind)
         // Trusted time trails the server's clock by the time its last answer took to arrive.
@@ -156,12 +193,12 @@ class ClientServerTest {
         val grant = assertNotNull(grantOf(aSaw.delivery { it.payload.string("t") == "watch_grant" }.payload))
         a.registerWatch(grant)
         assertEquals(listOf(b.keys.deviceId), a.authed { a.api.watches(circle) }.map { it.watchedDevice })
-        assertEquals(listOf(a.keys.accountId), b.authed { b.api.watches(circle) }.map { it.watcherAccount })
+        assertEquals(listOf(a.keys.accountId), b.watches(circle).map { it.watcherAccount })
 
         // A asks B for a live update, with locate; B has a stream, so the request comes at once.
         a.send(circle, Payloads.liveRequest(), to = listOf(b.keys.deviceId), wake = Wake.LOCATE)
-        val ask = bSaw.delivery { it.payload.string("t") == "sig" }
-        assertEquals(EnvelopeHeader.DIRECT, ask.kind)
+        val liveReq = bSaw.delivery { it.payload.string("t") == "sig" }
+        assertEquals(EnvelopeHeader.DIRECT, liveReq.kind)
 
         // B goes offline; A's alert, with notify, waits in B's inbox. If B's stream closed before the
         // cursor covering the live-view request reached it, that record comes again, and B's replay
@@ -184,6 +221,11 @@ class ClientServerTest {
         aSaw.delivery { it.payload.long("lat") == 490_000_000L }
         bStream = launch { b2.runStream(pingIntervalMs = 2_000) }
         b2Saw.streamOpen()
+
+        // B ends A's watch, as its person may at any time; ending it again changes nothing.
+        b2.endWatch(circle, a.keys.accountId)
+        b2.endWatch(circle, a.keys.accountId)
+        assertEquals(emptyList(), a.watches(circle).map { it.watchedDevice })
 
         // A session that ends is renewed on the next call.
         a.logout()

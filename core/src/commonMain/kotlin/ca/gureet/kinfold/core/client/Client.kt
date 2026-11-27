@@ -45,6 +45,11 @@ class Delivery(
     val payload: Json.Obj,
     /** The sender's trusted time when it sealed the envelope. */
     val sentAt: ULong,
+    /**
+     * The envelope's sequence number, which strictly increases for each sending device in a circle
+     * (PROTOCOL.md §7.1). An app never lets a lower one replace what a higher one set (§7.6).
+     */
+    val seq: ULong,
     /** The server's clock when it stored the envelope. */
     val receivedAt: ULong,
     /** This device's trusted time when it opened the envelope. */
@@ -101,6 +106,13 @@ interface ClientListener {
     suspend fun event(event: ServerEvent) {}
 
     suspend fun stream(change: StreamChange) {}
+
+    /**
+     * [circleId]'s verified log grew to entry [seq]: someone may have joined or left. An app that
+     * keeps data envelopes don't carry for long, such as its member's profile, sends it again
+     * (PROTOCOL.md §8.6).
+     */
+    suspend fun logChanged(circleId: Bytes, seq: Long) {}
 
     /** A push was dropped without telling anyone (PROTOCOL.md §14.2); the reason is only for logs. */
     suspend fun pushDropped(reason: PushReceipt.Drop) {}
@@ -292,11 +304,14 @@ class Client private constructor(
      * server's reported head disagrees with the log it served (§7.7).
      */
     suspend fun sync(circleId: Bytes) {
+        val before = lock.withLock { (views[circleId] ?: notMember()).state.seq }
         while (true) {
             val after = lock.withLock { (views[circleId] ?: notMember()).state.seq }
             val page = authed { api.log(circleId, after.takeIf { it >= 0 }) }
-            if (lock.withLock { applyPage(views[circleId] ?: notMember(), page) }) return
+            if (lock.withLock { applyPage(views[circleId] ?: notMember(), page) }) break
         }
+        val now = lock.withLock { views[circleId]?.state?.seq } ?: return
+        if (now > before) listener.logChanged(circleId, now)
     }
 
     /** Applies a page of entries; whether the device has caught up with the head the server reports. */
@@ -509,7 +524,7 @@ class Client private constructor(
                 val t = receipt.payload.string("t")
                 if (t == "welcome" || t == "refresh") takeEpochSecrets(circleId, receipt.payload)
                 val h = receipt.envelope.header
-                listener.delivered(Delivery(circleId, receipt.sender, h.kind, receipt.payload, h.sentAt, receivedAt, clock.now()))
+                listener.delivered(Delivery(circleId, receipt.sender, h.kind, receipt.payload, h.sentAt, h.seq, receivedAt, clock.now()))
             }
         }
     }
