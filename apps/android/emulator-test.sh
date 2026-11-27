@@ -140,7 +140,8 @@ echo "In Doze: $(adb shell dumpsys deviceidle get deep | tr -d '\r')"
 
 # The phone's log holds times, distances and states: never a coordinate. The walk would show as
 # 49.2… and -123.1… in degrees, or as the payloads' whole numbers, 49… and -123… in 10^-7 degree.
-if applog | grep -E '"(lat|lon|latitude|longitude)"|49\.[0-9]{3}|-123\.[0-9]{3}|[:,[]49[0-9]{7}[],}]|[:,[]-123[0-9]{7}[],}]' > "$work/leak" 2>&1; then
+# Only the lines themselves are checked, not logcat's prefix, whose clock (07:55:49.041) would match.
+if applog | sed -n 's/^.* kinfold *: //p' | grep -E '"(lat|lon|latitude|longitude)"|49\.[0-9]{3}|-123\.[0-9]{3}|[:,[]49[0-9]{7}[],}]|[:,[]-123[0-9]{7}[],}]' > "$work/leak" 2>&1; then
     cat "$work/leak" >&2
     fail "the phone's log holds a coordinate"
 fi
