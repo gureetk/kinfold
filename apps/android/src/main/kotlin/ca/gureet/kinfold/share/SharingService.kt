@@ -10,12 +10,13 @@ import android.location.Location
 import android.os.IBinder
 import android.os.SystemClock
 import ca.gureet.kinfold.Kinfold
-import ca.gureet.kinfold.core.client.Client
-import ca.gureet.kinfold.core.client.Payloads
-import ca.gureet.kinfold.core.payload.Json
-import ca.gureet.kinfold.core.wire.Bytes
-import ca.gureet.kinfold.family.Seen
-import kotlinx.coroutines.CancellationException
+import ca.gureet.kinfold.core.app.Battery
+import ca.gureet.kinfold.core.app.Fix
+import ca.gureet.kinfold.core.app.FixDetails
+import ca.gureet.kinfold.core.app.Step
+import ca.gureet.kinfold.core.app.activityOf
+import ca.gureet.kinfold.core.app.sendFix
+import ca.gureet.kinfold.core.app.sendHeartbeat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -130,51 +131,27 @@ class SharingService : Service() {
         val wake = Wakelocks.hold(this, "upload", 30_000)
         scope.launch {
             try {
-                val c = Kinfold.loadClient() ?: return@launch
-                val id = c.circles().firstOrNull() ?: return@launch
-                val now = c.clock.now()
-                val elapsed = SystemClock.elapsedRealtime()
-                fun ts(f: Fix): ULong = now - (elapsed - f.atMs).coerceAtLeast(0).toULong()
                 val b = Probes.battery(this@SharingService)
-                val extra = LinkedHashMap<String, Json>()
-                fix.spdCms?.let { extra["spd"] = Json.Num(it) }
-                if (location.hasBearing()) extra["hdg"] = Json.Num(location.bearing.roundToLong() % 360)
-                extra["bat"] = Json.Num(b.pct.toLong())
-                extra["chg"] = Json.Bool(b.charging)
-                val act = activity(step.mode, fix.spdCms)
-                extra["act"] = Json.Str(act)
-                if (Locator.isMock(location)) extra["mock"] = Json.Bool(true)
-                if (step.prev.isNotEmpty()) {
-                    extra["prev"] = Json.Arr(step.prev.map { Json.Arr(listOf(Json.Num(ts(it).toLong()), Json.Num(it.latE7), Json.Num(it.lonE7), Json.Num(it.accM))) })
-                }
-                send(c, id, "loc", Payloads.loc(ts(fix), fix.latE7, fix.lonE7, fix.accM, extra = extra), "age_ms" to elapsed - fix.atMs, "prev" to step.prev.size)
-                Kinfold.family.mine(Seen(ts(fix).toLong(), fix.latE7, fix.lonE7, fix.accM, b.pct.toLong(), b.charging, act))
+                val details = FixDetails(
+                    if (location.hasBearing()) location.bearing.roundToLong() else null,
+                    Battery(b.pct, b.charging),
+                    activityOf(step.mode, fix.spdCms),
+                    Locator.isMock(location),
+                )
+                if (Kinfold.home.sendFix(fix, step.prev, SystemClock.elapsedRealtime(), details, via())) sentMs = SystemClock.elapsedRealtime()
             } finally {
                 Wakelocks.release(wake)
             }
         }
     }
 
-    private suspend fun heartbeat(c: Client, id: Bytes, why: String) {
+    private suspend fun heartbeat(why: String) {
         val b = Probes.battery(this)
-        val payload = Payloads.heartbeat(c.clock.now(), listOf("sharing"), mapOf("bat" to Json.Num(b.pct.toLong()), "chg" to Json.Bool(b.charging)))
-        send(c, id, "hb", payload, "why" to why)
+        if (Kinfold.home.sendHeartbeat(Battery(b.pct, b.charging), why, via())) sentMs = SystemClock.elapsedRealtime()
     }
 
-    /** Uploads one envelope to the circle, on the stream when it is open, and logs how it went. */
-    private suspend fun send(c: Client, id: Bytes, type: String, payload: Json.Obj, vararg fields: Pair<String, Any?>) {
-        val via = if (Connection.connected.value) "stream" else "https"
-        val started = SystemClock.elapsedRealtime()
-        try {
-            val receivedAt = c.send(id, payload)
-            sentMs = SystemClock.elapsedRealtime()
-            log.write("upload", "type" to type, "via" to via, "took_ms" to sentMs - started, "stored" to (receivedAt != null), *fields)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            log.write("upload", "type" to type, "via" to via, "took_ms" to SystemClock.elapsedRealtime() - started, "error" to Kinfold.describe(e), *fields)
-        }
-    }
+    /** How an upload goes: on the stream when it is open. */
+    private fun via(): String = if (Connection.connected.value) "stream" else "https"
 
     // ---- the watchdog ----
 
@@ -194,9 +171,8 @@ class SharingService : Service() {
                 "mode" to locator?.mode?.name?.lowercase(),
                 *Probes.state(this),
             )
-            val c = Kinfold.loadClient() ?: return
-            val id = c.circles().firstOrNull() ?: return
-            if (sentMs == 0L || now - sentMs >= HEARTBEAT_AFTER_MS) heartbeat(c, id, "quiet")
+            if (Kinfold.loadClient()?.circles()?.firstOrNull() == null) return
+            if (sentMs == 0L || now - sentMs >= HEARTBEAT_AFTER_MS) heartbeat("quiet")
             if (!Connection.connected.value && down != 0L && now - down >= STREAM_STUCK_MS) Connection.restart("down too long")
             Kinfold.family.maintain("keepalive")
             Kinfold.family.flush()
@@ -278,16 +254,6 @@ class SharingService : Service() {
             Kinfold.log.write("sharing", "on" to false)
             Watchdog.cancel(context)
             context.stopService(Intent(context, SharingService::class.java))
-        }
-
-        /** A rough activity from the mode and the speed (PROTOCOL.md §8.2 `act`). */
-        fun activity(mode: Mode, spdCms: Long?): String = when {
-            mode == Mode.STILL -> "still"
-            spdCms == null -> if (mode == Mode.DRIVING) "drive" else "walk"
-            spdCms < 50 -> "still"
-            spdCms < 300 -> "walk"
-            spdCms < 700 -> "cycle"
-            else -> "drive"
         }
     }
 }

@@ -27,7 +27,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import ca.gureet.kinfold.Kinfold
-import ca.gureet.kinfold.family.Person
+import ca.gureet.kinfold.core.app.Person
 import ca.gureet.kinfold.ui.ago
 import ca.gureet.kinfold.ui.initials
 import org.json.JSONArray

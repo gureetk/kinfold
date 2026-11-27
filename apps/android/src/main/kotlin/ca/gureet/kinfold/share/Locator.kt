@@ -19,6 +19,10 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
 import ca.gureet.kinfold.Kinfold
+import ca.gureet.kinfold.core.app.Fix
+import ca.gureet.kinfold.core.app.Mode
+import ca.gureet.kinfold.core.app.Motion
+import ca.gureet.kinfold.core.app.Step
 import java.util.concurrent.Executor
 import kotlin.math.max
 import kotlin.math.roundToLong

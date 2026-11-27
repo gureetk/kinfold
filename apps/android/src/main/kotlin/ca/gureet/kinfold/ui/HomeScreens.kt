@@ -13,8 +13,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -39,16 +39,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
-import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import ca.gureet.kinfold.Kinfold
+import ca.gureet.kinfold.core.app.Ask
+import ca.gureet.kinfold.core.app.FamilyState
+import ca.gureet.kinfold.core.app.Person
 import ca.gureet.kinfold.core.wire.Bytes
-import ca.gureet.kinfold.family.Ask
-import ca.gureet.kinfold.family.FamilyState
-import ca.gureet.kinfold.family.Person
 import ca.gureet.kinfold.map.FamilyMap
 import ca.gureet.kinfold.map.Maps
 import ca.gureet.kinfold.qr.Qr
@@ -201,7 +201,8 @@ private fun PersonCard(p: Person, nowMs: Long, onLive: (Bytes) -> Unit) {
                 Text((p.name ?: "Someone") + if (p.isMe) " (you)" else "", style = MaterialTheme.typography.titleMedium)
                 val s = p.seen
                 if (s == null) {
-                    Text(if (p.heardAt != null) "No position yet · heard from ${ago(nowMs, p.heardAt)}" else "No position yet")
+                    val heard = p.heardAt
+                    Text(if (heard != null) "No position yet · heard from ${ago(nowMs, heard)}" else "No position yet")
                 } else {
                     Text(listOfNotNull(ago(nowMs, s.ts), "±${s.accM} m", s.bat?.let { "$it% battery" + if (s.charging == true) ", charging" else "" }).joinToString(" · "))
                 }

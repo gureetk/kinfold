@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
 import android.util.Log
+import ca.gureet.kinfold.core.app.Home
+import ca.gureet.kinfold.core.app.Platform
 import ca.gureet.kinfold.core.client.Client
 import ca.gureet.kinfold.core.client.OkHttpTransport
 import ca.gureet.kinfold.core.crypto.Primitives
@@ -14,9 +16,7 @@ import ca.gureet.kinfold.core.rendezvous.Invite
 import ca.gureet.kinfold.core.wire.Base64Url
 import ca.gureet.kinfold.core.wire.Bytes
 import ca.gureet.kinfold.family.Events
-import ca.gureet.kinfold.family.Family
 import ca.gureet.kinfold.log.EventLog
-import ca.gureet.kinfold.log.withoutAddresses
 import ca.gureet.kinfold.share.Notifications
 import ca.gureet.kinfold.share.Probes
 import ca.gureet.kinfold.store.AppStorage
@@ -24,8 +24,6 @@ import ca.gureet.kinfold.store.KeystoreSealer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.Base64
 
@@ -62,14 +60,35 @@ object Kinfold {
 
     /** For work that outlives a screen: setting up, joining, sending, exporting. */
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val lock = Mutex()
 
-    @Volatile
-    var client: Client? = null
-        private set
+    /** The core as the app holds it: the device's client and the family as this phone knows it. */
+    private val homeOnce = lazy { Home(p, transport, storage, AndroidPlatform, Events) }
+    val home: Home by homeOnce
 
-    /** The family as this phone knows it: people, names, positions, watches. */
-    val family: Family by lazy { Family(storage, log) { now() } }
+    /** The device's client, once loaded or set up. */
+    val client: Client? get() = home.client
+
+    /** The family as this phone knows it: people, names, positions, watches (the core's [ca.gureet.kinfold.core.app.Family]). */
+    val family get() = home.family
+
+    /** What only this app can tell the core. */
+    private object AndroidPlatform : Platform {
+        override fun hasDevice(): Boolean = storage.hasDevice()
+
+        override fun deviceName(): String = Kinfold.deviceName()
+
+        override var watchConsent: Boolean?
+            get() = Kinfold.watchConsent
+            set(v) {
+                Kinfold.watchConsent = v
+            }
+
+        override fun log(event: String, fields: List<Pair<String, Any?>>) = Kinfold.log.write(event, fields)
+
+        override fun timeOfDay(ms: Long): String = Kinfold.timeOfDay(ms)
+
+        override fun wallMs(): Long = System.currentTimeMillis()
+    }
 
     fun init(app: Application) {
         context = app
@@ -81,35 +100,16 @@ object Kinfold {
     }
 
     /** Trusted time once there is a client (PROTOCOL.md §8.4), the phone's clock before. */
-    fun now(): ULong = client?.clock?.now() ?: System.currentTimeMillis().toULong()
+    fun now(): ULong = if (homeOnce.isInitialized()) home.now() else System.currentTimeMillis().toULong()
 
     /** The device set up before, or null if this phone hasn't been set up. Not started yet. */
-    suspend fun loadClient(): Client? = lock.withLock {
-        client ?: Client.load(p, transport, storage)?.also {
-            it.listener = Events
-            client = it
-        }
-    }
+    suspend fun loadClient(): Client? = home.loadClient()
 
     /** Sets the phone up as a new account from the server's setup code (`kinfold setup`, PROTOCOL.md §13.1). */
-    suspend fun setUp(code: String): Client = lock.withLock {
-        check(client == null && !storage.hasDevice()) { "this phone is set up already" }
-        Client.setUp(p, transport, storage, code.trim()).also {
-            it.listener = Events
-            client = it
-        }
-    }
+    suspend fun setUp(code: String): Client = home.setUp(code)
 
     /** Sets the phone up from an invite, registering with the token it carries (PROTOCOL.md §9.2). */
-    suspend fun forInvite(invite: Invite): Client = lock.withLock {
-        val c = client ?: Client.load(p, transport, storage)?.also {
-            it.listener = Events
-            it.start()
-        } ?: Client.forInvite(p, transport, storage, invite)
-        c.listener = Events
-        client = c
-        c
-    }
+    suspend fun forInvite(invite: Invite): Client = home.forInvite(invite)
 
     /** The name this phone gives itself in a profile's device list: its make and model. */
     fun deviceName(): String = "${Build.MANUFACTURER} ${Build.MODEL}"
@@ -151,6 +151,11 @@ object Kinfold {
 
     fun id(b: Bytes): String = Base64Url.encode(b.toByteArray())
 
-    /** An error, for the log and the screen: its kind and its message without addresses ([withoutAddresses]). */
-    fun describe(e: Throwable): String = e::class.java.simpleName + (e.message?.let { ": " + withoutAddresses(it).take(200) } ?: "")
+    /** An error, for the log and the screen, without addresses (the core's [ca.gureet.kinfold.core.app.describe]). */
+    fun describe(e: Throwable): String = ca.gureet.kinfold.core.app.describe(e)
+
+    /** [ms] as the phone shows a time of day. */
+    fun timeOfDay(ms: Long): String =
+        java.time.format.DateTimeFormatter.ofLocalizedTime(java.time.format.FormatStyle.SHORT)
+            .format(java.time.Instant.ofEpochMilli(ms).atZone(java.time.ZoneId.systemDefault()))
 }
