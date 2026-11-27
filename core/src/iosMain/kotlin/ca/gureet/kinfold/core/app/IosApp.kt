@@ -408,6 +408,7 @@ class IosApp(dir: String, sealer: IosSealer, private val ios: IosPlatform, priva
     private val motion = Motion()
     private var sentMs = 0L
     private var fixMs = 0L
+    private var takenAtMs = 0L
 
     /** The engine's mode now, in lower case: `still`, `moving`, `driving` or `live`. */
     val mode: String get() = motion.mode.name.lowercase()
@@ -415,8 +416,15 @@ class IosApp(dir: String, sealer: IosSealer, private val ios: IosPlatform, priva
     /**
      * A fix from Core Location. [atMs] is when it was taken, on the phone's clock; [spdCms],
      * [headingDeg] and [batPct] are -1 when unknown. The engine decides whether it goes up.
+     *
+     * Core Location gives fixes as often as it likes, up to one a second; the engine takes them
+     * as often as the Android app asks for them in each mode ([Mode.intervalMs]), and lets the
+     * rest go, so that both send what the same engine decides and no more.
      */
     fun fix(atMs: Long, latE7: Long, lonE7: Long, accM: Long, spdCms: Long, headingDeg: Long, batPct: Int, charging: Boolean, mock: Boolean) {
+        val interval = motion.mode.intervalMs
+        if (interval > 0 && takenAtMs != 0L && atMs >= takenAtMs && atMs - takenAtMs < interval * 9 / 10) return
+        takenAtMs = atMs
         val f = Fix(atMs, latE7, lonE7, accM.coerceAtLeast(1), spdCms.takeIf { it >= 0 })
         val step = motion.add(f)
         val now = wallMillis()

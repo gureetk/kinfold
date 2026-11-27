@@ -153,6 +153,11 @@ adb shell dumpsys deviceidle force-idle
 await applog '"e":"live_req".*"state":"received"' 200 $((asks + 1))
 echo "In Doze: $(adb shell dumpsys deviceidle get deep | tr -d '\r')"
 
+# The engine sends no faster than the server takes: no upload was refused for its rate.
+if applog | grep -q '"e":"upload".*rate_limited'; then
+    fail "uploads went faster than the server allows"
+fi
+
 # The phone's log holds times, distances and states: never a coordinate. The walk would show as
 # 49.2… and -123.1… in degrees, or as the payloads' whole numbers, 49… and -123… in 10^-7 degree.
 # Only the lines themselves are checked, not logcat's prefix, whose clock (07:55:49.041) would match.

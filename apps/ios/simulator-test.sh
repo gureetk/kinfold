@@ -149,6 +149,11 @@ xcrun simctl launch "$sim" com.apple.Preferences > /dev/null
 await applog '"e":"live_req".*"state":"received"' 200 $((asks + 1))
 await journal '"e":"loc".*"answer_ms"' 120 $((answers + 1))
 
+# The engine sends no faster than the server takes: no upload was refused for its rate.
+if applog | grep -q '"e":"upload".*rate_limited'; then
+    fail "uploads went faster than the server allows"
+fi
+
 # The phone's log holds times, distances and states: never a coordinate. The walk would show as
 # 49.2… and -123.1… in degrees, or as the payloads' whole numbers, 49… and -123… in 10^-7 degree.
 if applog | grep -E '"(lat|lon|latitude|longitude)"|49\.[0-9]{3}|-123\.[0-9]{3}|[:,[]49[0-9]{7}[],}]|[:,[]-123[0-9]{7}[],}]' > "$work/leak" 2>&1; then
