@@ -1,0 +1,321 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		4B1F0E000000000000000021 /* KinfoldApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000001 /* KinfoldApp.swift */; };
+		4B1F0E000000000000000022 /* Model.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000002 /* Model.swift */; };
+		4B1F0E000000000000000023 /* Sealer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000003 /* Sealer.swift */; };
+		4B1F0E000000000000000024 /* EventLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000004 /* EventLog.swift */; };
+		4B1F0E000000000000000025 /* Locator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000005 /* Locator.swift */; };
+		4B1F0E000000000000000026 /* Maps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000006 /* Maps.swift */; };
+		4B1F0E000000000000000027 /* FamilyMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000007 /* FamilyMap.swift */; };
+		4B1F0E000000000000000028 /* QR.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000008 /* QR.swift */; };
+		4B1F0E000000000000000029 /* StartViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000009 /* StartViews.swift */; };
+		4B1F0E00000000000000002A /* HomeViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E00000000000000000A /* HomeViews.swift */; };
+		4B1F0E00000000000000002B /* SettingsViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E00000000000000000B /* SettingsViews.swift */; };
+		4B1F0E00000000000000002C /* TestDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1F0E00000000000000000C /* TestDriver.swift */; };
+		4B1F0E00000000000000002D /* KinfoldCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B1F0E00000000000000000F /* KinfoldCore.xcframework */; };
+		4B1F0E00000000000000002E /* KinfoldCore.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 4B1F0E00000000000000000F /* KinfoldCore.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		4B1F0E00000000000000002F /* MapLibre in Frameworks */ = {isa = PBXBuildFile; productRef = 4B1F0E000000000000000081 /* MapLibre */; };
+		4B1F0E000000000000000030 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 4B1F0E000000000000000010 /* assets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		4B1F0E000000000000000053 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			name = "Embed Frameworks";
+			files = (
+				4B1F0E00000000000000002E /* KinfoldCore.xcframework in Embed Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		4B1F0E000000000000000001 /* KinfoldApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KinfoldApp.swift; sourceTree = "<group>"; };
+		4B1F0E000000000000000002 /* Model.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Model.swift; sourceTree = "<group>"; };
+		4B1F0E000000000000000003 /* Sealer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sealer.swift; sourceTree = "<group>"; };
+		4B1F0E000000000000000004 /* EventLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventLog.swift; sourceTree = "<group>"; };
+		4B1F0E000000000000000005 /* Locator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Locator.swift; sourceTree = "<group>"; };
+		4B1F0E000000000000000006 /* Maps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Maps.swift; sourceTree = "<group>"; };
+		4B1F0E000000000000000007 /* FamilyMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FamilyMap.swift; sourceTree = "<group>"; };
+		4B1F0E000000000000000008 /* QR.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QR.swift; sourceTree = "<group>"; };
+		4B1F0E000000000000000009 /* StartViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartViews.swift; sourceTree = "<group>"; };
+		4B1F0E00000000000000000A /* HomeViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeViews.swift; sourceTree = "<group>"; };
+		4B1F0E00000000000000000B /* SettingsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViews.swift; sourceTree = "<group>"; };
+		4B1F0E00000000000000000C /* TestDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestDriver.swift; sourceTree = "<group>"; };
+		4B1F0E00000000000000000D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		4B1F0E00000000000000000E /* Kinfold.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Kinfold.xcconfig; sourceTree = "<group>"; };
+		4B1F0E00000000000000000F /* KinfoldCore.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = KinfoldCore.xcframework; path = ../../core/build/XCFrameworks/release/KinfoldCore.xcframework; sourceTree = SOURCE_ROOT; };
+		4B1F0E000000000000000010 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; name = assets; path = ../maps/assets; sourceTree = SOURCE_ROOT; };
+		4B1F0E000000000000000011 /* Kinfold.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Kinfold.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		4B1F0E000000000000000051 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B1F0E00000000000000002D /* KinfoldCore.xcframework in Frameworks */,
+				4B1F0E00000000000000002F /* MapLibre in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		4B1F0E000000000000000040 /* Kinfold */ = {
+			isa = PBXGroup;
+			children = (
+				4B1F0E000000000000000001 /* KinfoldApp.swift */,
+				4B1F0E000000000000000002 /* Model.swift */,
+				4B1F0E000000000000000003 /* Sealer.swift */,
+				4B1F0E000000000000000004 /* EventLog.swift */,
+				4B1F0E000000000000000005 /* Locator.swift */,
+				4B1F0E000000000000000006 /* Maps.swift */,
+				4B1F0E000000000000000007 /* FamilyMap.swift */,
+				4B1F0E000000000000000008 /* QR.swift */,
+				4B1F0E000000000000000009 /* StartViews.swift */,
+				4B1F0E00000000000000000A /* HomeViews.swift */,
+				4B1F0E00000000000000000B /* SettingsViews.swift */,
+				4B1F0E00000000000000000C /* TestDriver.swift */,
+				4B1F0E00000000000000000D /* Info.plist */,
+			);
+			path = Kinfold;
+			sourceTree = "<group>";
+		};
+		4B1F0E000000000000000041 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				4B1F0E00000000000000000E /* Kinfold.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+		4B1F0E000000000000000045 /* Maps */ = {
+			isa = PBXGroup;
+			children = (
+				4B1F0E000000000000000010 /* assets */,
+			);
+			name = Maps;
+			sourceTree = "<group>";
+		};
+		4B1F0E000000000000000042 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				4B1F0E00000000000000000F /* KinfoldCore.xcframework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		4B1F0E000000000000000043 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				4B1F0E000000000000000011 /* Kinfold.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		4B1F0E000000000000000044 = {
+			isa = PBXGroup;
+			children = (
+				4B1F0E000000000000000040 /* Kinfold */,
+				4B1F0E000000000000000041 /* Config */,
+				4B1F0E000000000000000045 /* Maps */,
+				4B1F0E000000000000000042 /* Frameworks */,
+				4B1F0E000000000000000043 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		4B1F0E000000000000000060 /* Kinfold */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4B1F0E000000000000000075 /* Build configuration list for PBXNativeTarget "Kinfold" */;
+			buildPhases = (
+				4B1F0E000000000000000050 /* Sources */,
+				4B1F0E000000000000000051 /* Frameworks */,
+				4B1F0E000000000000000052 /* Resources */,
+				4B1F0E000000000000000053 /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Kinfold;
+			packageProductDependencies = (
+				4B1F0E000000000000000081 /* MapLibre */,
+			);
+			productName = Kinfold;
+			productReference = 4B1F0E000000000000000011 /* Kinfold.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		4B1F0E000000000000000061 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2600;
+				LastUpgradeCheck = 2600;
+			};
+			buildConfigurationList = 4B1F0E000000000000000074 /* Build configuration list for PBXProject "Kinfold" */;
+			compatibilityVersion = "Xcode 15.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 4B1F0E000000000000000044;
+			packageReferences = (
+				4B1F0E000000000000000080 /* XCRemoteSwiftPackageReference "maplibre-gl-native-distribution" */,
+			);
+			productRefGroup = 4B1F0E000000000000000043 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				4B1F0E000000000000000060 /* Kinfold */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		4B1F0E000000000000000052 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B1F0E000000000000000030 /* assets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4B1F0E000000000000000050 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B1F0E000000000000000021 /* KinfoldApp.swift in Sources */,
+				4B1F0E000000000000000022 /* Model.swift in Sources */,
+				4B1F0E000000000000000023 /* Sealer.swift in Sources */,
+				4B1F0E000000000000000024 /* EventLog.swift in Sources */,
+				4B1F0E000000000000000025 /* Locator.swift in Sources */,
+				4B1F0E000000000000000026 /* Maps.swift in Sources */,
+				4B1F0E000000000000000027 /* FamilyMap.swift in Sources */,
+				4B1F0E000000000000000028 /* QR.swift in Sources */,
+				4B1F0E000000000000000029 /* StartViews.swift in Sources */,
+				4B1F0E00000000000000002A /* HomeViews.swift in Sources */,
+				4B1F0E00000000000000002B /* SettingsViews.swift in Sources */,
+				4B1F0E00000000000000002C /* TestDriver.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		4B1F0E000000000000000070 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4B1F0E00000000000000000E /* Kinfold.xcconfig */;
+			buildSettings = {
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		4B1F0E000000000000000071 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4B1F0E00000000000000000E /* Kinfold.xcconfig */;
+			buildSettings = {
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		4B1F0E000000000000000072 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				INFOPLIST_FILE = Kinfold/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ca.gureet.kinfold;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		4B1F0E000000000000000073 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				INFOPLIST_FILE = Kinfold/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ca.gureet.kinfold;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		4B1F0E000000000000000074 /* Build configuration list for PBXProject "Kinfold" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4B1F0E000000000000000070 /* Debug */,
+				4B1F0E000000000000000071 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4B1F0E000000000000000075 /* Build configuration list for PBXNativeTarget "Kinfold" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4B1F0E000000000000000072 /* Debug */,
+				4B1F0E000000000000000073 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		4B1F0E000000000000000080 /* XCRemoteSwiftPackageReference "maplibre-gl-native-distribution" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/maplibre/maplibre-gl-native-distribution";
+			requirement = {
+				kind = exactVersion;
+				version = 7.1.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		4B1F0E000000000000000081 /* MapLibre */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4B1F0E000000000000000080 /* XCRemoteSwiftPackageReference "maplibre-gl-native-distribution" */;
+			productName = MapLibre;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 4B1F0E000000000000000061 /* Project object */;
+}

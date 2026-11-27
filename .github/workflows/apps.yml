@@ -3,16 +3,17 @@ name: Apps
 
 # The apps (apps/): the Android app built, unit-tested and checked by Android Lint, then run in
 # emulators against a server built from server/, with the spikes' harness as the other family
-# member (apps/android/emulator-test.sh), and the map files they carry (apps/maps) made again from
-# their sources. The app builds the core from core/, so changes there, in server/ and in the
-# harness start this too.
+# member (apps/android/emulator-test.sh); the iOS app built for iPhones and the simulator, then run
+# in the simulator the same way (apps/ios/simulator-test.sh); and the map files they carry
+# (apps/maps) made again from their sources. The apps build the core from core/, so changes there,
+# in server/ and in the harness start this too.
 on:
   # Branches are tested through their pull requests; pushes only on main.
   push:
     branches: [main]
-    paths: ["apps/android/**", "apps/maps/**", "core/**", "server/**", "spikes/harness/**", "spikes/*.gradle.kts", "spikes/gradle/**", ".github/workflows/apps.yml"]
+    paths: ["apps/android/**", "apps/ios/**", "apps/maps/**", "core/**", "server/**", "spikes/harness/**", "spikes/*.gradle.kts", "spikes/gradle/**", ".github/workflows/apps.yml"]
   pull_request:
-    paths: ["apps/android/**", "apps/maps/**", "core/**", "server/**", "spikes/harness/**", "spikes/*.gradle.kts", "spikes/gradle/**", ".github/workflows/apps.yml"]
+    paths: ["apps/android/**", "apps/ios/**", "apps/maps/**", "core/**", "server/**", "spikes/harness/**", "spikes/*.gradle.kts", "spikes/gradle/**", ".github/workflows/apps.yml"]
 
 permissions:
   contents: read
@@ -185,6 +186,114 @@ jobs:
             sleep $((attempt * 60))
           done
           adb reverse tcp:8443 tcp:8443
+          ../../core/test-with-server.sh --no-daemon
+
+  # The iOS app: the core's XCFramework, then the app built unsigned for iPhones and the simulator
+  # with MapLibre at the version Package.resolved pins, then run in the simulator as the joiner or
+  # the creator, against a server and the harness.
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        role: [joiner, creator]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache: false
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # Gradle's downloads, kept from run to run so that a run asks Maven Central for little: it
+      # turns busy runners away. Gradle checks every artifact against verification-metadata.xml
+      # whether it was downloaded or kept, so a kept one can't change what a build uses.
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.gradle/caches/modules-2
+          key: gradle-${{ github.workflow }}-${{ github.job }}-${{ runner.os }}-${{ hashFiles('**/gradle/verification-metadata.xml') }}
+          restore-keys: gradle-${{ github.workflow }}-${{ github.job }}-${{ runner.os }}-
+
+      - name: Gradle 9.9.1, checked against its published SHA-256
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/gradle.zip" https://services.gradle.org/distributions/gradle-9.9.1-bin.zip
+          echo "d8a18a7a841dd5df825d35a685fad6f2d7f12ac0c280e57b67c27b4a520ba228  $RUNNER_TEMP/gradle.zip" | shasum -a 256 -c
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-9.9.1/bin" >> "$GITHUB_PATH"
+
+      - name: The server's modules
+        working-directory: server
+        run: |
+          go mod download
+          go mod verify
+
+      # build-core.sh checks Kotlin/Native's own downloads first (core/kotlin-native-deps.sh).
+      - name: The core's XCFramework, and the harness
+        run: |
+          log="$RUNNER_TEMP/core.log"
+          for attempt in 1 2 3 4 5; do
+            if apps/ios/build-core.sh --no-daemon > "$log" 2>&1 && gradle --no-daemon --console=plain -p spikes :harness:installDist >> "$log" 2>&1; then
+              cat "$log"
+              break
+            fi
+            cat "$log"
+            if ! grep -q -E "Could not (GET|HEAD|download|resolve)|could not resolve plugin artifact|Read timed out|429" "$log"; then exit 1; fi
+            [ "$attempt" = 5 ] && exit 1
+            sleep $((attempt * 60))
+          done
+          if grep "Downloading dependency " "$log"; then
+            echo "Kotlin/Native downloaded the above, which no hash checked"
+            exit 1
+          fi
+
+      - name: The newest iOS simulator's first iPhone
+        run: |
+          xcodebuild -version
+          device=$(xcrun simctl list devices available --json | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          ios = sorted((k for k in devices if ".iOS-" in k), key=lambda k: [int(x) for x in k.rsplit("iOS-", 1)[1].split("-")])
+          for runtime in reversed(ios):
+              for d in devices[runtime]:
+                  if d["name"].startswith("iPhone"):
+                      print(d["udid"], runtime.rsplit(".", 1)[1], d["name"], file=sys.stderr)
+                      print(d["udid"])
+                      sys.exit()
+          sys.exit("no iPhone simulator")
+          ')
+          echo "SIMULATOR=$device" >> "$GITHUB_ENV"
+
+      # The packages come at the revisions Package.resolved pins, and Swift Package Manager checks
+      # MapLibre's download against the checksum its package declares.
+      - name: The app, for the simulator and for iPhones, unsigned
+        run: |
+          for destination in "platform=iOS Simulator,id=$SIMULATOR" "generic/platform=iOS"; do
+            echo "::group::Kinfold for $destination"
+            xcodebuild -project apps/ios/Kinfold.xcodeproj -scheme Kinfold -configuration Debug \
+              -destination "$destination" -derivedDataPath "$RUNNER_TEMP/dd" -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm" \
+              -disableAutomaticPackageResolution CODE_SIGNING_ALLOWED=NO build
+            echo "::endgroup::"
+          done
+          ls -l "$RUNNER_TEMP"/dd/Build/Products/*/
+
+      - name: The app in the simulator as the ${{ matrix.role }}, against a server and the harness
+        working-directory: apps/ios
+        env:
+          KINFOLD_TEST_DIR: .
+          KINFOLD_TEST_CMD: ./simulator-test.sh
+          KINFOLD_TEST_ROLE: ${{ matrix.role }}
+          # The world map stands in for a region: the app downloads it from the server and draws it.
+          KINFOLD_TEST_REGION: ${{ github.workspace }}/apps/maps/assets/world.pmtiles
+        run: |
+          export KINFOLD_TEST_APP="$RUNNER_TEMP/dd/Build/Products/Debug-iphonesimulator/Kinfold.app"
           ../../core/test-with-server.sh --no-daemon
 
   # The map files the apps carry (apps/maps), made again from their sources and compared: the style

@@ -2,7 +2,7 @@
 
 An Xcode project with two apps, built on the shared core as `KinfoldCore.xcframework`:
 
-- **Kinfold** (`ca.gureet.kinfold`), the iOS spike app, with a screen for each spike. Its bundle ID is the topic of the family server's Apple push key. Two screens so far:
+- **Kinfold spikes** (`ca.gureet.kinfold.spikes`), the iOS spike app, with a screen for each spike. The real app, `apps/ios`, has `ca.gureet.kinfold`, the topic of the family server's Apple push key, so both can be on the iPhone at once. Two screens so far:
   - **The core in this app.** The Kotlin core reaches CryptoKit through its Swift layer and gives two known answers: SHA-256 of "abc" (FIPS 180-2) and the public key of RFC 8032's first Ed25519 test, along with a signature that verifies.
   - **The test vectors in WebKit**, for spike 5. It runs `../web`'s page, with `reference/js` and the vectors, in the phone's WebKit, the engine Safari uses. The app carries the files and serves them to its web view under a scheme of its own on `localhost`, which WebKit counts as a secure context. Nothing comes from the network.
 - **CoreTests** (`ca.gureet.kinfold.coretests`), the host for spike 5's iPhone run. Its program is the core's own test binary, which runs every test in `commonTest` and `iosTest` against CryptoKit, with the vectors and the spec in the app. It has no screen: Xcode's console shows what it prints, and it exits when the tests end.

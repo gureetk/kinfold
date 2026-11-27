@@ -88,3 +88,10 @@ fun Client.regionUrl(region: Region): String = serverUrl + region.path
  */
 suspend fun <T> Client.downloadRegion(region: Region, download: suspend (url: String, headers: Map<String, String>) -> T): T =
     authed { download(regionUrl(region), api.sessionHeaders()) }
+
+/**
+ * The headers that carry the session, for a platform that fetches a region itself rather than
+ * through [downloadRegion]. The session is renewed first if it is about to end; after a 401, the
+ * platform logs in again ([Client.login]) and asks once more.
+ */
+suspend fun Client.sessionHeaders(): Map<String, String> = authed { api.sessionHeaders() }
