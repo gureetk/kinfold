@@ -1,0 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception */
+
+/* The text of an alert from the family that the phone couldn't open (API.md §12). Apple and the server see only this key. */
+"push_fallback" = "Something new from your family. Open Kinfold to see it.";

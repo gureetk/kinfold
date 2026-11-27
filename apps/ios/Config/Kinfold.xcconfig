@@ -24,4 +24,8 @@ ENABLE_USER_SCRIPT_SANDBOXING = YES
 MARKETING_VERSION = 0.1
 CURRENT_PROJECT_VERSION = 1
 
+// Apple's push environment for the tokens this build gets (API.md §12): sandbox for a build run
+// from Xcode, production for TestFlight and the App Store. The app tells the server which.
+KINFOLD_PUSH_ENVIRONMENT = sandbox
+
 #include? "Local.xcconfig"

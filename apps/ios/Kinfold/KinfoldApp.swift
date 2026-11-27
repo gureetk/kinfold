@@ -26,13 +26,26 @@ struct KinfoldApp: App {
 
 /**
  * Started by the system too, without a screen: after a location update or a significant change
- * when the app wasn't running. The model then picks sharing up where it was.
+ * when the app wasn't running, or for a background push. The model then picks sharing up where
+ * it was. Apple's alert token comes here as well.
  */
 final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         let model = Model.shared
         model.launched(byLocation: options?[.location] != nil)
         return true
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        Model.shared.gotNotifyToken(deviceToken)
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        Model.shared.notifyTokenFailed()
+    }
+
+    func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any], fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        Model.shared.backgroundPush(userInfo, completion: completionHandler)
     }
 }
 

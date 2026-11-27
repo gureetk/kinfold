@@ -18,7 +18,9 @@ import ca.gureet.kinfold.core.log.MemberLog
 import ca.gureet.kinfold.core.log.Outcome
 import ca.gureet.kinfold.core.payload.EpochSecrets
 import ca.gureet.kinfold.core.payload.Json
+import ca.gureet.kinfold.core.push.PushMessage
 import ca.gureet.kinfold.core.push.PushReceipt
+import ca.gureet.kinfold.core.push.Pushes
 import ca.gureet.kinfold.core.push.WatchGrant
 import ca.gureet.kinfold.core.rendezvous.Invite
 import ca.gureet.kinfold.core.server.Login
@@ -474,12 +476,12 @@ class Client private constructor(
         return Envelope.seal(p, keys.signing, header, recipients, payload.encode())
     }
 
-    /** The next envelope sequence number, stored as used before it is (§7.1). */
-    private fun nextSeq(): ULong {
-        val seq = storage.read(Names.SEQ)?.let { readAll(it) { u64() } } ?: 1UL
-        storage.write(Names.SEQ, encode { u64(seq + 1UL) })
-        return seq
-    }
+    /**
+     * The next envelope sequence number, stored as used before it is (§7.1). Through
+     * [Storage.next], so that an iPhone's app extensions, which send as the same device, never
+     * take a number the app took.
+     */
+    private fun nextSeq(): ULong = storage.next(Names.SEQ, 1UL)
 
     /** Uploads on the stream where the server takes that (`stream_post`), otherwise by HTTP. */
     private suspend fun upload(circleId: Bytes, raw: ByteArray, wake: Wake?): ULong {
@@ -512,6 +514,32 @@ class Client private constructor(
             }
             page.cursor?.let { saveCursor(it) }
             if (!page.more || page.records.isEmpty()) return count
+        }
+    }
+
+    /**
+     * Handles a push that came by a route other than the stream (PROTOCOL.md §14.2): Apple, the
+     * relay or a UnifiedPush distributor. It opens with the device's keys only if the server
+     * signed it for this device within 10 minutes of trusted time, and then counts as the stream's
+     * pushes do: a silence alert for the listener, records handled as if fetched, or the inbox
+     * fetched for a wake-up. A push that doesn't check out is dropped without a word to anyone but
+     * the listener's log. What became of it.
+     */
+    suspend fun pushed(sealed: ByteArray): PushReceipt =
+        Pushes.open(p, sealed, keys.deviceId, keys.hpkeKeys, serverKey, clock.now()).also { handle(it) }
+
+    /** What a push asks once it has opened, or the listener told why it was dropped. */
+    internal suspend fun handle(receipt: PushReceipt) {
+        when (receipt) {
+            is PushReceipt.Dropped -> listener.pushDropped(receipt.reason)
+            is PushReceipt.Opened -> when (val m = receipt.message) {
+                is PushMessage.Silence -> listener.silence(SilenceAlert(m.circleId, m.watchedDevice, m.lastSeenAt, m.sentAt))
+                is PushMessage.Records -> for (rec in m.records) receiveSafely(encode {
+                    u64(rec.receivedAt)
+                    bytes(rec.envelope)
+                })
+                is PushMessage.Wake -> fetchInbox()
+            }
         }
     }
 

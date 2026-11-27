@@ -2,16 +2,27 @@
 package ca.gureet.kinfold.core
 
 import ca.gureet.kinfold.core.client.Backoff
+import ca.gureet.kinfold.core.client.Client
+import ca.gureet.kinfold.core.client.ClientListener
 import ca.gureet.kinfold.core.client.ClientException
 import ca.gureet.kinfold.core.client.DeviceKeys
+import ca.gureet.kinfold.core.client.HttpRequest
+import ca.gureet.kinfold.core.client.HttpResponse
+import ca.gureet.kinfold.core.client.MemoryStorage
+import ca.gureet.kinfold.core.client.Names
 import ca.gureet.kinfold.core.client.Payloads
 import ca.gureet.kinfold.core.client.ServerApi
+import ca.gureet.kinfold.core.client.SilenceAlert
+import ca.gureet.kinfold.core.client.Transport
+import ca.gureet.kinfold.core.client.TransportException
 import ca.gureet.kinfold.core.client.TrustedClock
+import ca.gureet.kinfold.core.client.WebSocket
 import ca.gureet.kinfold.core.client.frames
 import ca.gureet.kinfold.core.client.framesLenient
 import ca.gureet.kinfold.core.client.grantOf
 import ca.gureet.kinfold.core.client.percentEncode
 import ca.gureet.kinfold.core.client.unframe
+import ca.gureet.kinfold.core.client.wallMillis
 import ca.gureet.kinfold.core.crypto.Primitives
 import ca.gureet.kinfold.core.identity.DeviceKind
 import ca.gureet.kinfold.core.identity.KeyBundle
@@ -22,6 +33,7 @@ import ca.gureet.kinfold.core.push.Pushes
 import ca.gureet.kinfold.core.push.WatchGrant
 import ca.gureet.kinfold.core.wire.Base64Url
 import ca.gureet.kinfold.core.wire.Bytes
+import ca.gureet.kinfold.core.wire.encode
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -152,6 +164,65 @@ class ClientTest {
         assertEquals(PushReceipt.Drop.BAD_TIME, dropped(Pushes.openSigned(p, push, device, serverKey, sentAt + 600_001UL)))
         assertEquals(PushReceipt.Drop.MALFORMED, dropped(Pushes.openSigned(p, push.copyOf(push.size - 1), device, serverKey, sentAt)))
         assertEquals(PushReceipt.Drop.WRONG_SIZE, dropped(Pushes.openSigned(p, ByteArray(Pushes.PLAIN_SIZE + 1), device, serverKey, sentAt)))
+    }
+
+    @Test
+    fun aSealedPushIsHandledAsTheStreamWould() = sync {
+        // A device as an iPhone's extension finds it in the app's files, with no network at all.
+        val server = p.crypto.ed25519(ByteArray(32) { 9 })
+        val storage = MemoryStorage()
+        val keys = DeviceKeys.create(p, DeviceKind.PHONE, wallMillis().toULong())
+        storage.write(Names.SERVER, encode {
+            vec16("https://kinfold.example".encodeToByteArray())
+            bytes(server.publicKey)
+        })
+        storage.write(Names.DEVICE, keys.encode())
+        val c = assertNotNull(Client.load(p, NoNetwork, storage))
+        val heard = ArrayList<String>()
+        c.listener = object : ClientListener {
+            override suspend fun silence(alert: SilenceAlert) {
+                heard.add("silence ${alert.lastSeenAt}")
+            }
+
+            override suspend fun pushDropped(reason: PushReceipt.Drop) {
+                heard.add("dropped $reason")
+            }
+        }
+        val sentAt = wallMillis().toULong()
+        val body = Pushes.silenceBody(Bytes.of(ByteArray(16) { 1 }), Bytes.of(ByteArray(16) { 2 }), 77UL)
+        val push = Pushes.make(p, server, keys.deviceId, Pushes.SILENCE, sentAt, body)
+        val sealed = Pushes.seal(p, push, keys.deviceId, keys.encryption.publicKey)
+        assertEquals(Pushes.SEALED_SIZE, sealed.size)
+        assertIs<PushReceipt.Opened>(c.pushed(sealed))
+        // Sealed to another key, cut short, or signed by another server: dropped, and only the log hears of it.
+        val elsewhere = Pushes.seal(p, push, keys.deviceId, DeviceKeys.create(p, DeviceKind.PHONE, sentAt).encryption.publicKey)
+        assertIs<PushReceipt.Dropped>(c.pushed(elsewhere))
+        assertIs<PushReceipt.Dropped>(c.pushed(sealed.copyOf(sealed.size - 1)))
+        val forged = Pushes.make(p, p.crypto.ed25519(ByteArray(32) { 8 }), keys.deviceId, Pushes.SILENCE, sentAt, body)
+        assertIs<PushReceipt.Dropped>(c.pushed(Pushes.seal(p, forged, keys.deviceId, keys.encryption.publicKey)))
+        assertEquals(listOf("silence 77", "dropped UNKNOWN_KEY", "dropped WRONG_SIZE", "dropped BAD_SIGNATURE"), heard)
+    }
+
+    @Test
+    fun countersCarryOnFromWhatIsStored() {
+        val storage = MemoryStorage()
+        assertEquals(1UL, storage.next("seq", 1UL))
+        assertEquals(2UL, storage.next("seq", 1UL))
+        // The sequence number as clients before Storage.next kept it: a u64, the next one to use.
+        storage.write("seq", encode { u64(41UL) })
+        assertEquals(41UL, storage.next("seq", 1UL))
+        assertContentEquals(encode { u64(42UL) }, storage.read("seq"))
+        // Something that isn't a counter is an error, never a reason to count again from the start.
+        storage.write("seq", byteArrayOf(1, 2, 3))
+        assertFailsWith<ProtocolException> { storage.next("seq", 1UL) }
+    }
+
+    /** A transport for tests that must not reach a server. */
+    private object NoNetwork : Transport {
+        override suspend fun exchange(request: HttpRequest): HttpResponse = throw TransportException("no network in this test")
+
+        override suspend fun connect(url: String, headers: Map<String, String>, pingIntervalMs: Long): WebSocket =
+            throw TransportException("no network in this test")
     }
 
     @Test

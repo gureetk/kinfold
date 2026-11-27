@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
 //
 // What seals the core's secret files: the device's keys, the epoch secrets and the app's records.
+// The app and both extensions compile it.
 
 import CryptoKit
 import Foundation
@@ -13,6 +14,9 @@ import Security
  * sharing works while it is locked), and never goes into a backup or onto another phone: a copy
  * of the files is unreadable elsewhere. A sealed file is a format byte (1), then CryptoKit's
  * combined box: the 12-byte nonce, the ciphertext and the 16-byte tag.
+ *
+ * The key is in the app group's access group, so that the app's extensions open the same files.
+ * A build signed without the group (the simulator's in CI) keeps it in the app's own group.
  */
 final class KeychainSealer: NSObject, IosSealer {
     private static let format: UInt8 = 1
@@ -40,12 +44,18 @@ final class KeychainSealer: NSObject, IosSealer {
     private static let service = "ca.gureet.kinfold.storage"
 
     private static func loadOrCreate() -> (SymmetricKey?, Int32) {
-        let query: [String: Any] = [
+        let shared = loadOrCreate(group: Shared.group)
+        return shared.1 == errSecMissingEntitlement ? loadOrCreate(group: nil) : shared
+    }
+
+    private static func loadOrCreate(group: String?) -> (SymmetricKey?, Int32) {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: "key",
             kSecReturnData as String: true,
         ]
+        if let group { query[kSecAttrAccessGroup as String] = group }
         var found: CFTypeRef?
         let read = SecItemCopyMatching(query as CFDictionary, &found)
         if read == errSecSuccess, let bytes = found as? Data, bytes.count == 32 {
@@ -54,13 +64,14 @@ final class KeychainSealer: NSObject, IosSealer {
         if read != errSecItemNotFound { return (nil, read) }
         let key = SymmetricKey(size: .bits256)
         let bytes = key.withUnsafeBytes { Data($0) }
-        let add: [String: Any] = [
+        var add: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: "key",
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
             kSecValueData as String: bytes,
         ]
+        if let group { add[kSecAttrAccessGroup as String] = group }
         let status = SecItemAdd(add as CFDictionary, nil)
         return status == errSecSuccess ? (key, 0) : (nil, status)
     }

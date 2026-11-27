@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
 package ca.gureet.kinfold.core.client
 
-import ca.gureet.kinfold.core.push.PushMessage
-import ca.gureet.kinfold.core.push.PushReceipt
 import ca.gureet.kinfold.core.push.Pushes
 import ca.gureet.kinfold.core.wire.Base64Url
 import ca.gureet.kinfold.core.wire.Bytes
@@ -198,17 +196,7 @@ internal class StreamRunner(private val c: Client, private val pingIntervalMs: L
 
     /** A push on the stream: signed by the server, not sealed (API.md §7). */
     private suspend fun push(body: ByteArray) {
-        when (val r = Pushes.openSigned(c.p, body, c.keys.deviceId, c.serverKey, c.clock.now())) {
-            is PushReceipt.Dropped -> c.listener.pushDropped(r.reason)
-            is PushReceipt.Opened -> when (val m = r.message) {
-                is PushMessage.Silence -> c.listener.silence(SilenceAlert(m.circleId, m.watchedDevice, m.lastSeenAt, m.sentAt))
-                is PushMessage.Records -> for (rec in m.records) c.receiveSafely(encode {
-                    u64(rec.receivedAt)
-                    bytes(rec.envelope)
-                })
-                is PushMessage.Wake -> c.fetchInbox()
-            }
-        }
+        c.handle(Pushes.openSigned(c.p, body, c.keys.deviceId, c.serverKey, c.clock.now()))
     }
 
     private suspend fun event(body: ByteArray) {

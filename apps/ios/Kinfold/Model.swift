@@ -28,43 +28,36 @@ final class Model: NSObject, ObservableObject, IosPlatform, IosHooks {
     @Published private(set) var joining = false
     @Published private(set) var authorization: CLAuthorizationStatus = .notDetermined
 
-    let log = EventLog()
+    let log = Shared.log
     let locator = Locator()
     let maps = Maps()
     private(set) var app: IosApp!
-    private let defaults = UserDefaults.standard
+    private let defaults = Shared.defaults
     private let paths = NWPathMonitor()
     private var path: NWPath?
 
     private override init() {
         super.init()
         let sealer = KeychainSealer()
-        app = IosApp(dir: Self.storageDirectory().path, sealer: sealer, ios: self, hooks: self)
+        app = IosApp(dir: Shared.storageDirectory.path, sealer: sealer, ios: self, hooks: self)
         if sealer.failure != 0 {
             // Without the key, nothing secret can be kept: setting up and joining fail.
             app.log(event: "keychain", keys: ["state", "status"], values: ["failed", KotlinInt(value: sealer.failure)])
         }
+        // Without the app group, the extensions can't open the device's files: pushes show the fixed text.
+        app.log(event: "storage", keys: ["app_group"], values: [KotlinBoolean(value: Shared.inGroup)])
         maps.model = self
         locator.onFix = { [weak self] location in self?.fix(location) }
         locator.onAuthorization = { [weak self] status in
             self?.authorization = status
             self?.app.log(event: "permission", keys: ["location"], values: [Self.describe(status)])
+            if status == .authorizedAlways { self?.startLocationPushes() }
         }
         UIDevice.current.isBatteryMonitoringEnabled = true
         paths.pathUpdateHandler = { [weak self] path in
             DispatchQueue.main.async { self?.pathChanged(path) }
         }
         paths.start(queue: DispatchQueue(label: "ca.gureet.kinfold.paths"))
-    }
-
-    /** Where the core keeps the device's files: inside the app's container, left out of backups. */
-    private static func storageDirectory() -> URL {
-        var dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("kinfold", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
-        var values = URLResourceValues()
-        values.isExcludedFromBackup = true
-        try? dir.setResourceValues(values)
-        return dir
     }
 
     // ---- the app's life ----
@@ -157,12 +150,12 @@ final class Model: NSObject, ObservableObject, IosPlatform, IosHooks {
 
     // ---- sharing ----
 
-    /** Whether the person has turned sharing on; a relaunch keeps it going until they stop it. */
+    /** Whether the person has turned sharing on; a relaunch keeps it going until they stop it. The location-push extension reads it too. */
     private(set) var sharingOn: Bool {
-        get { defaults.bool(forKey: "sharing") }
+        get { defaults.bool(forKey: Shared.sharingKey) }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: "sharing")
+            defaults.set(newValue, forKey: Shared.sharingKey)
         }
     }
 
@@ -201,39 +194,23 @@ final class Model: NSObject, ObservableObject, IosPlatform, IosHooks {
 
     // ---- IosPlatform ----
 
-    func deviceName() -> String {
-        var info = utsname()
-        uname(&info)
-        let machine = withUnsafeBytes(of: &info.machine) { raw in
-            String(decoding: raw.prefix { $0 != 0 }, as: UTF8.self)
-        }
-        return "Apple " + machine
-    }
+    func deviceName() -> String { Shared.deviceName() }
 
     func watchConsent() -> Int32 {
-        guard let on = defaults.object(forKey: "watch_consent") as? Bool else { return -1 }
+        guard let on = defaults.object(forKey: Shared.watchConsentKey) as? Bool else { return -1 }
         return on ? 1 : 0
     }
 
     func setWatchConsent(on: Bool) {
         objectWillChange.send()
-        defaults.set(on, forKey: "watch_consent")
+        defaults.set(on, forKey: Shared.watchConsentKey)
     }
 
     func writeLog(line: String) {
         log.write(line)
     }
 
-    func timeOfDay(ms: Int64) -> String {
-        Self.time.string(from: Date(timeIntervalSince1970: Double(ms) / 1000))
-    }
-
-    private static let time: DateFormatter = {
-        let f = DateFormatter()
-        f.dateStyle = .none
-        f.timeStyle = .short
-        return f
-    }()
+    func timeOfDay(ms: Int64) -> String { Shared.timeOfDay(ms) }
 
     // ---- IosHooks ----
 
@@ -261,6 +238,88 @@ final class Model: NSObject, ObservableObject, IosPlatform, IosHooks {
 
     func familyChanged(state: FamilyState) {
         family = state
+        if state.setUp && !pushesAsked {
+            pushesAsked = true
+            registerForPushes()
+        }
+    }
+
+    // ---- pushes ----
+
+    /** Apple's tokens for this phone (API.md §12): for alerts, and for location pushes once location is allowed all the time. */
+    private var notifyToken: Data?
+    private var locateToken: Data?
+    private var locationPushes: CLLocationManager?
+
+    /** Whether this build's tokens are from Apple's sandbox, as for a build run from Xcode (Config/Kinfold.xcconfig). */
+    private static let pushSandbox = (Bundle.main.object(forInfoDictionaryKey: "KinfoldPushEnvironment") as? String) != "production"
+
+    private var pushesAsked = false
+
+    /**
+     * Asks iOS for the tokens, so that the server can wake the phone through Apple when iOS has
+     * suspended the app: alerts go to the notification extension, live-view requests to the
+     * location-push extension. Once the phone is set up, at each launch.
+     */
+    private func registerForPushes() {
+        #if DEBUG
+            // The simulator in CI can't reach Apple; the test runs the extensions' core itself.
+            if TestDriver.active { return }
+        #endif
+        UIApplication.shared.registerForRemoteNotifications()
+        if locator.status == .authorizedAlways { startLocationPushes() }
+    }
+
+    private func startLocationPushes() {
+        #if DEBUG
+            if TestDriver.active { return }
+        #endif
+        guard locationPushes == nil else { return }
+        let manager = CLLocationManager()
+        locationPushes = manager
+        manager.startMonitoringLocationPushes { [weak self] token, _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let token {
+                    self.locateToken = token
+                    self.registerPush()
+                } else {
+                    self.locationPushes = nil
+                    self.app.log(event: "push_registration", keys: ["state", "route"], values: ["no_token", "location"])
+                }
+            }
+        }
+    }
+
+    func gotNotifyToken(_ token: Data) {
+        notifyToken = token
+        registerPush()
+    }
+
+    func notifyTokenFailed() {
+        app.log(event: "push_registration", keys: ["state", "route"], values: ["no_token", "alert"])
+    }
+
+    /** Sends the tokens to the server; again whenever iOS gives a new one. */
+    private func registerPush() {
+        guard let notifyToken else { return }
+        app.registerPush(notify: notifyToken, locate: locateToken, sandbox: Self.pushSandbox)
+    }
+
+    /**
+     * A background push, which the server sends for a live-view request when the phone has no
+     * location-push token: iOS gives the app a few seconds, enough for the core to handle it and
+     * for sharing to answer.
+     */
+    func backgroundPush(_ info: [AnyHashable: Any], completion: @escaping (UIBackgroundFetchResult) -> Void) {
+        guard let payload = info["kinfold"] as? String else { return completion(.noData) }
+        if sharingOn {
+            locator.start()
+            app.connect()
+        }
+        app.pushed(payload: payload) { kind in
+            completion(kind == "dropped" || kind == "failed" ? .noData : .newData)
+        }
     }
 
     // ---- notifications ----
