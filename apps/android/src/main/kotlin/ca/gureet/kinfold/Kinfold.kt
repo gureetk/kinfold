@@ -6,13 +6,10 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
 import android.util.Log
-import ca.gureet.kinfold.core.app.Family
-import ca.gureet.kinfold.core.app.FamilyEvents
-import ca.gureet.kinfold.core.app.FamilyHost
+import ca.gureet.kinfold.core.app.Home
+import ca.gureet.kinfold.core.app.Platform
 import ca.gureet.kinfold.core.client.Client
-import ca.gureet.kinfold.core.client.ClientListener
 import ca.gureet.kinfold.core.client.OkHttpTransport
-import ca.gureet.kinfold.core.client.Storage
 import ca.gureet.kinfold.core.crypto.Primitives
 import ca.gureet.kinfold.core.crypto.TinkCrypto
 import ca.gureet.kinfold.core.rendezvous.Invite
@@ -27,8 +24,6 @@ import ca.gureet.kinfold.store.KeystoreSealer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.Base64
 
@@ -65,25 +60,20 @@ object Kinfold {
 
     /** For work that outlives a screen: setting up, joining, sending, exporting. */
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val lock = Mutex()
 
-    @Volatile
-    var client: Client? = null
-        private set
+    /** The core as the app holds it: the device's client and the family as this phone knows it. */
+    private val homeOnce = lazy { Home(p, transport, storage, AndroidPlatform, Events) }
+    val home: Home by homeOnce
 
-    /** The family as this phone knows it: people, names, positions, watches (the core's [Family]). */
-    val family: Family by lazy { Family(Host) }
+    /** The device's client, once loaded or set up. */
+    val client: Client? get() = home.client
 
-    /** What the client tells the app, through the family to [Events]. */
-    private val listener: ClientListener by lazy { FamilyEvents(family, Host, Events) }
+    /** The family as this phone knows it: people, names, positions, watches (the core's [ca.gureet.kinfold.core.app.Family]). */
+    val family get() = home.family
 
-    /** What the core's family needs from this app. */
-    private object Host : FamilyHost {
-        override suspend fun client(): Client? = loadClient()
-
-        override fun hasDevice(): Boolean = Kinfold.storage.hasDevice()
-
-        override val storage: Storage get() = Kinfold.storage
+    /** What only this app can tell the core. */
+    private object AndroidPlatform : Platform {
+        override fun hasDevice(): Boolean = storage.hasDevice()
 
         override fun deviceName(): String = Kinfold.deviceName()
 
@@ -95,9 +85,9 @@ object Kinfold {
 
         override fun log(event: String, fields: List<Pair<String, Any?>>) = Kinfold.log.write(event, fields)
 
-        override fun now(): ULong = Kinfold.now()
-
         override fun timeOfDay(ms: Long): String = Kinfold.timeOfDay(ms)
+
+        override fun wallMs(): Long = System.currentTimeMillis()
     }
 
     fun init(app: Application) {
@@ -110,35 +100,16 @@ object Kinfold {
     }
 
     /** Trusted time once there is a client (PROTOCOL.md §8.4), the phone's clock before. */
-    fun now(): ULong = client?.clock?.now() ?: System.currentTimeMillis().toULong()
+    fun now(): ULong = if (homeOnce.isInitialized()) home.now() else System.currentTimeMillis().toULong()
 
     /** The device set up before, or null if this phone hasn't been set up. Not started yet. */
-    suspend fun loadClient(): Client? = lock.withLock {
-        client ?: Client.load(p, transport, storage)?.also {
-            it.listener = listener
-            client = it
-        }
-    }
+    suspend fun loadClient(): Client? = home.loadClient()
 
     /** Sets the phone up as a new account from the server's setup code (`kinfold setup`, PROTOCOL.md §13.1). */
-    suspend fun setUp(code: String): Client = lock.withLock {
-        check(client == null && !storage.hasDevice()) { "this phone is set up already" }
-        Client.setUp(p, transport, storage, code.trim()).also {
-            it.listener = listener
-            client = it
-        }
-    }
+    suspend fun setUp(code: String): Client = home.setUp(code)
 
     /** Sets the phone up from an invite, registering with the token it carries (PROTOCOL.md §9.2). */
-    suspend fun forInvite(invite: Invite): Client = lock.withLock {
-        val c = client ?: Client.load(p, transport, storage)?.also {
-            it.listener = listener
-            it.start()
-        } ?: Client.forInvite(p, transport, storage, invite)
-        c.listener = listener
-        client = c
-        c
-    }
+    suspend fun forInvite(invite: Invite): Client = home.forInvite(invite)
 
     /** The name this phone gives itself in a profile's device list: its make and model. */
     fun deviceName(): String = "${Build.MANUFACTURER} ${Build.MODEL}"
