@@ -272,16 +272,22 @@ jobs:
           echo "SIMULATOR=$device" >> "$GITHUB_ENV"
 
       # The packages come at the revisions Package.resolved pins, and Swift Package Manager checks
-      # MapLibre's download against the checksum its package declares.
-      - name: The app, for the simulator and for iPhones, unsigned
+      # MapLibre's download against the checksum its package declares. The simulator's build is
+      # signed to run locally, as Xcode signs it: the Keychain, which keeps the key that seals the
+      # app's secrets, serves only a signed app. The build for iPhones is unsigned.
+      - name: The app, for the simulator and for iPhones
         run: |
-          for destination in "platform=iOS Simulator,id=$SIMULATOR" "generic/platform=iOS"; do
+          build() {
+            destination=$1
+            shift
             echo "::group::Kinfold for $destination"
             xcodebuild -project apps/ios/Kinfold.xcodeproj -scheme Kinfold -configuration Debug \
               -destination "$destination" -derivedDataPath "$RUNNER_TEMP/dd" -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm" \
-              -disableAutomaticPackageResolution CODE_SIGNING_ALLOWED=NO build
+              -disableAutomaticPackageResolution "$@" build
             echo "::endgroup::"
-          done
+          }
+          build "platform=iOS Simulator,id=$SIMULATOR" CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual
+          build "generic/platform=iOS" CODE_SIGNING_ALLOWED=NO
           ls -l "$RUNNER_TEMP"/dd/Build/Products/*/
 
       - name: The app in the simulator as the ${{ matrix.role }}, against a server and the harness

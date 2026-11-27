@@ -17,9 +17,13 @@ import Security
 final class KeychainSealer: NSObject, IosSealer {
     private static let format: UInt8 = 1
     private let key: SymmetricKey?
+    /** The Keychain's answer when the key couldn't be read or made (an OSStatus), or 0. */
+    let failure: Int32
 
     override init() {
-        key = Self.loadOrCreate()
+        let loaded = Self.loadOrCreate()
+        key = loaded.0
+        failure = loaded.1
         super.init()
     }
 
@@ -35,7 +39,7 @@ final class KeychainSealer: NSObject, IosSealer {
 
     private static let service = "ca.gureet.kinfold.storage"
 
-    private static func loadOrCreate() -> SymmetricKey? {
+    private static func loadOrCreate() -> (SymmetricKey?, Int32) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -43,9 +47,11 @@ final class KeychainSealer: NSObject, IosSealer {
             kSecReturnData as String: true,
         ]
         var found: CFTypeRef?
-        if SecItemCopyMatching(query as CFDictionary, &found) == errSecSuccess, let bytes = found as? Data, bytes.count == 32 {
-            return SymmetricKey(data: bytes)
+        let read = SecItemCopyMatching(query as CFDictionary, &found)
+        if read == errSecSuccess, let bytes = found as? Data, bytes.count == 32 {
+            return (SymmetricKey(data: bytes), 0)
         }
+        if read != errSecItemNotFound { return (nil, read) }
         let key = SymmetricKey(size: .bits256)
         let bytes = key.withUnsafeBytes { Data($0) }
         let add: [String: Any] = [
@@ -56,6 +62,6 @@ final class KeychainSealer: NSObject, IosSealer {
             kSecValueData as String: bytes,
         ]
         let status = SecItemAdd(add as CFDictionary, nil)
-        return status == errSecSuccess ? key : nil
+        return status == errSecSuccess ? (key, 0) : (nil, status)
     }
 }

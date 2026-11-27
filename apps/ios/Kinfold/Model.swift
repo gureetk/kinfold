@@ -38,7 +38,12 @@ final class Model: NSObject, ObservableObject, IosPlatform, IosHooks {
 
     private override init() {
         super.init()
-        app = IosApp(dir: Self.storageDirectory().path, sealer: KeychainSealer(), ios: self, hooks: self)
+        let sealer = KeychainSealer()
+        app = IosApp(dir: Self.storageDirectory().path, sealer: sealer, ios: self, hooks: self)
+        if sealer.failure != 0 {
+            // Without the key, nothing secret can be kept: setting up and joining fail.
+            app.log(event: "keychain", keys: ["state", "status"], values: ["failed", KotlinInt(value: sealer.failure)])
+        }
         maps.model = self
         locator.onFix = { [weak self] location in self?.fix(location) }
         locator.onAuthorization = { [weak self] status in
