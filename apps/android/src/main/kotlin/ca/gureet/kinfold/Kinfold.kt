@@ -6,17 +6,20 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
 import android.util.Log
+import ca.gureet.kinfold.core.app.Family
+import ca.gureet.kinfold.core.app.FamilyEvents
+import ca.gureet.kinfold.core.app.FamilyHost
 import ca.gureet.kinfold.core.client.Client
+import ca.gureet.kinfold.core.client.ClientListener
 import ca.gureet.kinfold.core.client.OkHttpTransport
+import ca.gureet.kinfold.core.client.Storage
 import ca.gureet.kinfold.core.crypto.Primitives
 import ca.gureet.kinfold.core.crypto.TinkCrypto
 import ca.gureet.kinfold.core.rendezvous.Invite
 import ca.gureet.kinfold.core.wire.Base64Url
 import ca.gureet.kinfold.core.wire.Bytes
 import ca.gureet.kinfold.family.Events
-import ca.gureet.kinfold.family.Family
 import ca.gureet.kinfold.log.EventLog
-import ca.gureet.kinfold.log.withoutAddresses
 import ca.gureet.kinfold.share.Notifications
 import ca.gureet.kinfold.share.Probes
 import ca.gureet.kinfold.store.AppStorage
@@ -68,8 +71,34 @@ object Kinfold {
     var client: Client? = null
         private set
 
-    /** The family as this phone knows it: people, names, positions, watches. */
-    val family: Family by lazy { Family(storage, log) { now() } }
+    /** The family as this phone knows it: people, names, positions, watches (the core's [Family]). */
+    val family: Family by lazy { Family(Host) }
+
+    /** What the client tells the app, through the family to [Events]. */
+    private val listener: ClientListener by lazy { FamilyEvents(family, Host, Events) }
+
+    /** What the core's family needs from this app. */
+    private object Host : FamilyHost {
+        override suspend fun client(): Client? = loadClient()
+
+        override fun hasDevice(): Boolean = Kinfold.storage.hasDevice()
+
+        override val storage: Storage get() = Kinfold.storage
+
+        override fun deviceName(): String = Kinfold.deviceName()
+
+        override var watchConsent: Boolean?
+            get() = Kinfold.watchConsent
+            set(v) {
+                Kinfold.watchConsent = v
+            }
+
+        override fun log(event: String, fields: List<Pair<String, Any?>>) = Kinfold.log.write(event, fields)
+
+        override fun now(): ULong = Kinfold.now()
+
+        override fun timeOfDay(ms: Long): String = Kinfold.timeOfDay(ms)
+    }
 
     fun init(app: Application) {
         context = app
@@ -86,7 +115,7 @@ object Kinfold {
     /** The device set up before, or null if this phone hasn't been set up. Not started yet. */
     suspend fun loadClient(): Client? = lock.withLock {
         client ?: Client.load(p, transport, storage)?.also {
-            it.listener = Events
+            it.listener = listener
             client = it
         }
     }
@@ -95,7 +124,7 @@ object Kinfold {
     suspend fun setUp(code: String): Client = lock.withLock {
         check(client == null && !storage.hasDevice()) { "this phone is set up already" }
         Client.setUp(p, transport, storage, code.trim()).also {
-            it.listener = Events
+            it.listener = listener
             client = it
         }
     }
@@ -103,10 +132,10 @@ object Kinfold {
     /** Sets the phone up from an invite, registering with the token it carries (PROTOCOL.md §9.2). */
     suspend fun forInvite(invite: Invite): Client = lock.withLock {
         val c = client ?: Client.load(p, transport, storage)?.also {
-            it.listener = Events
+            it.listener = listener
             it.start()
         } ?: Client.forInvite(p, transport, storage, invite)
-        c.listener = Events
+        c.listener = listener
         client = c
         c
     }
@@ -151,6 +180,11 @@ object Kinfold {
 
     fun id(b: Bytes): String = Base64Url.encode(b.toByteArray())
 
-    /** An error, for the log and the screen: its kind and its message without addresses ([withoutAddresses]). */
-    fun describe(e: Throwable): String = e::class.java.simpleName + (e.message?.let { ": " + withoutAddresses(it).take(200) } ?: "")
+    /** An error, for the log and the screen, without addresses (the core's [ca.gureet.kinfold.core.app.describe]). */
+    fun describe(e: Throwable): String = ca.gureet.kinfold.core.app.describe(e)
+
+    /** [ms] as the phone shows a time of day. */
+    fun timeOfDay(ms: Long): String =
+        java.time.format.DateTimeFormatter.ofLocalizedTime(java.time.format.FormatStyle.SHORT)
+            .format(java.time.Instant.ofEpochMilli(ms).atZone(java.time.ZoneId.systemDefault()))
 }

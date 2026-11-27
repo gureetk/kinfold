@@ -10,11 +10,11 @@ import android.location.Location
 import android.os.IBinder
 import android.os.SystemClock
 import ca.gureet.kinfold.Kinfold
+import ca.gureet.kinfold.core.app.Seen
 import ca.gureet.kinfold.core.client.Client
 import ca.gureet.kinfold.core.client.Payloads
 import ca.gureet.kinfold.core.payload.Json
 import ca.gureet.kinfold.core.wire.Bytes
-import ca.gureet.kinfold.family.Seen
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

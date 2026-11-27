@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
 package ca.gureet.kinfold.log
 
-import ca.gureet.kinfold.core.payload.Json
+import ca.gureet.kinfold.core.app.LogLines
 import java.io.File
 import java.io.FileWriter
 import java.io.Writer
@@ -26,24 +26,13 @@ class EventLog(private val dir: File, private val mirror: ((String) -> Unit)?, p
         prune()
     }
 
-    /** Writes one line, fields in the order given. Numbers are whole; anything else is a string. */
+    /** Writes one line, fields in the order given ([LogLines]). */
+    fun write(event: String, vararg fields: Pair<String, Any?>) = write(event, fields.toList())
+
     @Synchronized
-    fun write(event: String, vararg fields: Pair<String, Any?>) {
+    fun write(event: String, fields: List<Pair<String, Any?>>) {
         val t = now()
-        val map = LinkedHashMap<String, Json>()
-        map["t"] = Json.Num(t.toLong())
-        map["e"] = Json.Str(event)
-        for ((k, v) in fields) {
-            when (v) {
-                null -> {}
-                is Int -> map[k] = Json.Num(v.toLong())
-                is Long -> map[k] = Json.Num(v)
-                is ULong -> map[k] = Json.Num(v.toLong())
-                is Boolean -> map[k] = Json.Bool(v)
-                else -> map[k] = Json.Str(v.toString())
-            }
-        }
-        val line = Json.Obj(map).write()
+        val line = LogLines.format(t, event, fields)
         try {
             writer(t).apply {
                 write(line)
@@ -90,18 +79,3 @@ class EventLog(private val dir: File, private val mirror: ((String) -> Unit)?, p
         const val KEEP_DAYS = 30L
     }
 }
-
-/**
- * [message] with every address in it replaced: URLs by `<url>`, IP addresses by `<ip>` and host
- * names by `<host>`, each with its port. Errors from the network name the server they failed to
- * reach ("Failed to connect to …", "Unable to resolve host …"), and a log says what went wrong
- * without saying where.
- */
-fun withoutAddresses(message: String): String = ADDRESSES.fold(message) { s, (pattern, by) -> pattern.replace(s, by) }
-
-private val ADDRESSES = listOf(
-    Regex("""[A-Za-z][A-Za-z0-9+.-]*://\S+""") to "<url>",
-    Regex("""\[?(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?:%[A-Za-z0-9]+)?\]?(?::\d+)?""") to "<ip>",
-    Regex("""\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b""") to "<ip>",
-    Regex("""\b(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}\b(?::\d+)?""") to "<host>",
-)

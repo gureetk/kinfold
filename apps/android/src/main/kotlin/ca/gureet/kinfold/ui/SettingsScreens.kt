@@ -31,8 +31,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import ca.gureet.kinfold.Kinfold
-import ca.gureet.kinfold.family.Family
-import ca.gureet.kinfold.family.FamilyState
+import ca.gureet.kinfold.core.app.Family
+import ca.gureet.kinfold.core.app.FamilyState
 import ca.gureet.kinfold.share.Health
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -135,7 +135,7 @@ fun LiveAsksScreen(family: FamilyState, onBack: () -> Unit) {
         if (family.liveAsks.isEmpty()) Text("Nobody has asked yet.")
         for (a in family.liveAsks) {
             Column {
-                Text("${names[a.from] ?: "A former member"} · ${Family.timeOfDay(a.at)}, ${java.time.Instant.ofEpochMilli(a.at).atZone(java.time.ZoneId.systemDefault()).toLocalDate()}")
+                Text("${names[a.from] ?: "A former member"} · ${Kinfold.timeOfDay(a.at)}, ${java.time.Instant.ofEpochMilli(a.at).atZone(java.time.ZoneId.systemDefault()).toLocalDate()}")
                 Text(if (a.honored) "Sent live updates for a couple of minutes." else "Not answered: sharing was off, or they had asked less than a minute before.", style = MaterialTheme.typography.bodySmall)
             }
         }

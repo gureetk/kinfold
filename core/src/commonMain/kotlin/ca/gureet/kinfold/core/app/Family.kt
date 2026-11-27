@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
-package ca.gureet.kinfold.family
+package ca.gureet.kinfold.core.app
 
-import ca.gureet.kinfold.Kinfold
 import ca.gureet.kinfold.core.client.Client
 import ca.gureet.kinfold.core.client.Delivery
 import ca.gureet.kinfold.core.client.JoinAsk
@@ -27,13 +26,12 @@ import ca.gureet.kinfold.core.log.Role
 import ca.gureet.kinfold.core.payload.Json
 import ca.gureet.kinfold.core.wire.Base64Url
 import ca.gureet.kinfold.core.wire.Bytes
-import ca.gureet.kinfold.log.EventLog
-import ca.gureet.kinfold.store.AppStorage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.concurrent.Volatile
 
 /** A family member's latest position as this phone received it. Kept in memory and in the sealed `app-family` file only. */
 data class Seen(
@@ -87,7 +85,7 @@ data class FamilyState(
  * and people asking to join. Names and positions are kept sealed in `app-family`; the log gets
  * only times, distances and IDs.
  */
-class Family(private val storage: AppStorage, private val log: EventLog, private val now: () -> ULong) {
+class Family(private val host: FamilyHost) {
     private val lock = Mutex()
     private val state = MutableStateFlow(FamilyState())
     private var rec = Records()
@@ -96,7 +94,7 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
     private val seqs = HashMap<Bytes, ULong>()
 
     /** The device's client, loaded from storage when first needed; null before the phone is set up. */
-    private suspend fun client(): Client? = Kinfold.loadClient()
+    private suspend fun client(): Client? = host.client()
 
     /** While this phone lets someone in: it sends its profile once the new member can read it. */
     @Volatile
@@ -109,8 +107,8 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
     val ui: StateFlow<FamilyState> get() = state
 
     init {
-        rec = storage.read(FILE)?.let { Records.decode(it) } ?: Records()
-        state.value = FamilyState(setUp = storage.hasDevice(), myName = rec.myName)
+        rec = host.storage.read(FILE)?.let { Records.decode(it) } ?: Records()
+        state.value = FamilyState(setUp = host.hasDevice(), myName = rec.myName)
     }
 
     // ---- what the phone does ----
@@ -129,7 +127,7 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
             save()
         }
         val id = c.createCircle(circleName)
-        log.write("circle", "state" to "created", "circle" to b64(id))
+        log("circle", "state" to "created", "circle" to b64(id))
         refresh()
         maintain("created")
         return id
@@ -157,7 +155,7 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
         val id = c.circles().firstOrNull() ?: return
         val st = c.state(id) ?: return
         if (st.device(c.keys.deviceId) == null) return
-        val nowMs = now().toLong()
+        val nowMs = host.now().toLong()
         val name = rec.myName
         val devices = st.receivingDevices().map { b64(it.id) }.sorted()
         if (name != null && (nowMs - rec.profileAt > PROFILE_EVERY_MS || !rec.profileFor.containsAll(devices))) {
@@ -166,7 +164,7 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
                     linkedMapOf(
                         "t" to Json.Str("profile"),
                         "name" to Json.Str(name),
-                        "devices" to Json.Obj(mapOf(b64(c.keys.deviceId) to Json.Str(Kinfold.deviceName()))),
+                        "devices" to Json.Obj(mapOf(b64(c.keys.deviceId) to Json.Str(host.deviceName()))),
                     ),
                 )
                 c.send(id, p)
@@ -175,10 +173,10 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
                     rec.profileFor = devices.toSet()
                     save()
                 }
-                log.write("profile", "state" to "sent", "why" to why, "devices" to devices.size)
+                log("profile", "state" to "sent", "why" to why, "devices" to devices.size)
             }
         }
-        if (Kinfold.watchConsent == true) {
+        if (host.watchConsent == true) {
             for (m in st.members.values) {
                 if (m.accountId == c.keys.accountId || m.role != Role.ADULT) continue
                 val key = b64(m.accountId)
@@ -190,7 +188,7 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
                         rec.grants[key] = nowMs
                         save()
                     }
-                    log.write("watch", "state" to "granted", "watcher" to key, "after_min" to WATCH_AFTER_MIN)
+                    log("watch", "state" to "granted", "watcher" to key, "after_min" to WATCH_AFTER_MIN)
                 }
             }
         }
@@ -202,8 +200,8 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
      * watch on this phone, and the server refuses the grants issued before (API.md §8).
      */
     suspend fun setWatchConsent(on: Boolean) {
-        Kinfold.watchConsent = on
-        log.write("watch", "state" to if (on) "consented" else "declined")
+        host.watchConsent = on
+        log("watch", "state" to if (on) "consented" else "declined")
         val c = client() ?: return
         if (on) {
             maintain("consented")
@@ -213,7 +211,7 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
         attempt("ending the watches") {
             for (w in c.watches(id).filter { it.watchedDevice == c.keys.deviceId }) {
                 c.endWatch(id, w.watcherAccount)
-                log.write("watch", "state" to "ended", "watcher" to b64(w.watcherAccount))
+                log("watch", "state" to "ended", "watcher" to b64(w.watcherAccount))
             }
         }
         lock.withLock {
@@ -229,7 +227,7 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
         val id = c.circles().firstOrNull() ?: return null
         val st = c.state(id) ?: return null
         val pending = c.invite(id, st.name, rec.myName ?: "")
-        log.write("invite", "state" to "made", "valid_ms" to INVITE_VALID_MS)
+        log("invite", "state" to "made", "valid_ms" to INVITE_VALID_MS)
         state.value = state.value.copy(invite = pending)
         return pending
     }
@@ -249,13 +247,13 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                log.write("failed", "what" to "fetching join requests", "error" to Kinfold.describe(e))
+                log("failed", "what" to "fetching join requests", "error" to describe(e))
                 continue
             }
             for (a in found) asks.add(Ask(pending, a, SafetyCode.code(c.p, c.keys.identity.publicKey, a.ikPub.toByteArray())))
         }
         state.value = state.value.copy(asks = asks)
-        if (asks.isNotEmpty()) log.write("join_request", "waiting" to asks.size)
+        if (asks.isNotEmpty()) log("join_request", "waiting" to asks.size)
         return asks
     }
 
@@ -274,7 +272,7 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
             rec.profileAt = 0
             save()
         }
-        log.write("admitted", "account" to b64(admitted.accountId), "device" to b64(admitted.deviceId))
+        log("admitted", "account" to b64(admitted.accountId), "device" to b64(admitted.deviceId))
         state.value = state.value.copy(asks = state.value.asks - ask, invite = null)
         refresh()
         maintain("member added")
@@ -283,7 +281,7 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
     suspend fun decline(ask: Ask) {
         val c = client() ?: return
         c.decline(ask.pending)
-        log.write("declined")
+        log("declined")
         state.value = state.value.copy(asks = state.value.asks.filter { it.pending != ask.pending }, invite = null)
     }
 
@@ -303,10 +301,10 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
         val id = c.circles().firstOrNull() ?: return
         val devices = c.state(id)?.members?.get(person)?.devices?.values?.filter { it.kind.receives }?.map { it.id } ?: return
         if (devices.isEmpty()) return
-        val until = now() + LIVE_MS.toULong()
+        val until = host.now() + LIVE_MS.toULong()
         attempt("asking for live updates") {
             c.send(id, Payloads.liveRequest(until), to = devices, wake = Wake.LOCATE)
-            log.write("live_req", "state" to "sent", "to" to b64(person), "devices" to devices.size)
+            log("live_req", "state" to "sent", "to" to b64(person), "devices" to devices.size)
         }
     }
 
@@ -325,7 +323,7 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
                     rec.names[b64(from)] = name
                     save()
                 }
-                log.write("profile", "state" to "received", "from" to b64(d.sender.id))
+                log("profile", "state" to "received", "from" to b64(d.sender.id))
                 refresh()
             }
             "watch_grant" -> {
@@ -334,7 +332,7 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
                 if (grant.watcherAccount != c.keys.accountId) return null
                 attempt("registering a watch") {
                     c.registerWatch(grant)
-                    log.write("watch", "state" to "registered", "device" to b64(grant.watchedDevice), "after_min" to grant.afterMin)
+                    log("watch", "state" to "registered", "device" to b64(grant.watchedDevice), "after_min" to grant.afterMin)
                     lock.withLock {
                         rec.watching.add(b64(from))
                         save()
@@ -368,7 +366,7 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
             saveSoon()
             true
         }
-        log.write(
+        log(
             "position",
             "from" to b64(d.sender.id),
             "age_ms" to d.openedAt.toLong() - ts,
@@ -397,7 +395,7 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
      */
     private suspend fun live(d: Delivery, sharing: Boolean): Long? {
         val from = d.sender.accountId
-        val nowMs = now().toLong()
+        val nowMs = host.now().toLong()
         val until = d.payload.long("until")
         val forMs = (until?.let { it - nowMs } ?: LIVE_MS).coerceIn(30_000L, 300_000L)
         val honored = lock.withLock {
@@ -408,7 +406,7 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
             save()
             ok
         }
-        log.write(
+        log(
             "live_req",
             "state" to "received",
             "from" to b64(d.sender.id),
@@ -427,8 +425,8 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
         val c = client()
         val account = c?.state(alert.circleId)?.device(alert.watchedDevice)?.accountId
         val name = account?.let { lock.withLock { rec.names[b64(it)] } } ?: "A family member"
-        log.write("silence", "device" to b64(alert.watchedDevice), "last_seen_at" to alert.lastSeenAt, "sent_at" to alert.sentAt)
-        val since = if (alert.lastSeenAt > 0UL) " since " + timeOfDay(alert.lastSeenAt.toLong()) else ""
+        log("silence", "device" to b64(alert.watchedDevice), "last_seen_at" to alert.lastSeenAt, "sent_at" to alert.sentAt)
+        val since = if (alert.lastSeenAt > 0UL) " since " + host.timeOfDay(alert.lastSeenAt.toLong()) else ""
         return "No updates from $name's phone" to "Kinfold hasn't heard from it$since. It may be off, out of battery or without a connection."
     }
 
@@ -436,7 +434,7 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
     suspend fun watchEnded(watchedDevice: Bytes, reason: String) {
         val c = client() ?: return
         val account = c.circles().firstOrNull()?.let { c.state(it) }?.device(watchedDevice)?.accountId
-        log.write("watch", "state" to "ended_by_server", "device" to b64(watchedDevice), "reason" to reason)
+        log("watch", "state" to "ended_by_server", "device" to b64(watchedDevice), "reason" to reason)
         if (account != null) {
             lock.withLock {
                 rec.watching.remove(b64(account))
@@ -468,7 +466,7 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
     suspend fun refresh() {
         val c = client()
         if (c == null) {
-            state.value = state.value.copy(setUp = storage.hasDevice(), myName = rec.myName)
+            state.value = state.value.copy(setUp = host.hasDevice(), myName = rec.myName)
             return
         }
         val id = if (joining) null else c.circles().firstOrNull()
@@ -509,13 +507,13 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
     private var dirtySince = 0L
 
     private fun save() {
-        storage.write(FILE, rec.encode())
+        host.storage.write(FILE, rec.encode())
         dirtySince = 0
     }
 
     /** Positions arrive often; they are written at most every half minute. */
     private fun saveSoon() {
-        val t = System.currentTimeMillis()
+        val t = host.now().toLong()
         if (dirtySince == 0L) dirtySince = t
         if (t - dirtySince >= SAVE_EVERY_MS) save()
     }
@@ -523,13 +521,15 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
     /** Writes what [saveSoon] held back; the service calls it on its rounds and when it stops. */
     suspend fun flush() = lock.withLock { if (dirtySince != 0L) save() }
 
+    private fun log(event: String, vararg fields: Pair<String, Any?>) = host.log(event, fields.toList())
+
     private suspend fun attempt(what: String, block: suspend () -> Unit) {
         try {
             block()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            log.write("failed", "what" to what, "error" to Kinfold.describe(e))
+            log("failed", "what" to what, "error" to describe(e))
         }
     }
 
@@ -547,10 +547,6 @@ class Family(private val storage: AppStorage, private val log: EventLog, private
         const val SAVE_EVERY_MS = 30_000L
 
         fun b64(b: Bytes): String = Base64Url.encode(b.toByteArray())
-
-        fun timeOfDay(ms: Long): String =
-            java.time.format.DateTimeFormatter.ofLocalizedTime(java.time.format.FormatStyle.SHORT)
-                .format(java.time.Instant.ofEpochMilli(ms).atZone(java.time.ZoneId.systemDefault()))
     }
 }
 

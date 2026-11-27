@@ -70,7 +70,7 @@ object Connection {
         startStream(c, why)
     }
 
-    /** What the client tells the app about its stream, through [ca.gureet.kinfold.family.Events]. */
+    /** What the client tells the app about its stream, through the core's [ca.gureet.kinfold.core.app.FamilyEvents]. */
     fun changed(change: StreamChange) {
         val now = SystemClock.elapsedRealtime()
         when (change) {
