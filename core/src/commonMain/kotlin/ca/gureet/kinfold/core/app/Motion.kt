@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Kinfold-AppStore-Exception
-package ca.gureet.kinfold.share
+package ca.gureet.kinfold.core.app
 
 import kotlin.math.asin
 import kotlin.math.cos
+import kotlin.math.PI
 import kotlin.math.max
 import kotlin.math.roundToLong
 import kotlin.math.sin
@@ -39,7 +40,7 @@ class Step(val mode: Mode, val changed: Boolean, val upload: Boolean, val prev: 
 
 /**
  * The location engine's decisions: when to change modes and when a fix goes to the server. It has
- * no clock and touches nothing Android has, so it is tested on its own.
+ * no clock and touches nothing a platform has, so both apps share it and it is tested on its own.
  */
 class Motion(mode: Mode = Mode.MOVING) {
     var mode: Mode = mode
@@ -162,10 +163,22 @@ class Motion(mode: Mode = Mode.MOVING) {
 /** The distance between two fixes along the earth's surface, in metres. */
 fun distanceM(a: Fix, b: Fix): Long {
     val r = 6_371_008.8
-    val lat1 = Math.toRadians(a.latE7 / 1e7)
-    val lat2 = Math.toRadians(b.latE7 / 1e7)
+    val lat1 = radians(a.latE7 / 1e7)
+    val lat2 = radians(b.latE7 / 1e7)
     val dLat = lat2 - lat1
-    val dLon = Math.toRadians((b.lonE7 - a.lonE7) / 1e7)
+    val dLon = radians((b.lonE7 - a.lonE7) / 1e7)
     val h = sin(dLat / 2) * sin(dLat / 2) + cos(lat1) * cos(lat2) * sin(dLon / 2) * sin(dLon / 2)
     return (2 * r * asin(sqrt(h.coerceIn(0.0, 1.0)))).roundToLong()
+}
+
+private fun radians(deg: Double): Double = deg * PI / 180.0
+
+/** What a `loc` says the person is doing (§8.2 `act`), from the engine's mode and the fix's speed. */
+fun activityOf(mode: Mode, spdCms: Long?): String = when {
+    mode == Mode.STILL -> "still"
+    spdCms == null -> if (mode == Mode.DRIVING) "drive" else "walk"
+    spdCms < 50 -> "still"
+    spdCms < 300 -> "walk"
+    spdCms < 700 -> "cycle"
+    else -> "drive"
 }

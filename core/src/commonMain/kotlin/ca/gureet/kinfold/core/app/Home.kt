@@ -71,6 +71,9 @@ class Home(val p: Primitives, val transport: Transport, val storage: Storage, pr
     /** What the client tells the app: through [family] to the app's hooks. */
     private val listener = FamilyEvents(family, host, hooks)
 
+    /** Writes one line to the app's log ([LogLines]). */
+    internal fun log(event: String, fields: List<Pair<String, Any?>>) = platform.log(event, fields)
+
     /** Trusted time once there is a client (PROTOCOL.md §8.4), the phone's clock before. */
     fun now(): ULong = client?.clock?.now() ?: platform.wallMs().toULong()
 
